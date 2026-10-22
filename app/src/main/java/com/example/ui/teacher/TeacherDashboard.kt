@@ -222,13 +222,21 @@ fun TeacherDashboard(
             TopAppBar(
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Image(
-                            painter = painterResource(id = R.drawable.rqeeb_logo),
-                            contentDescription = "شعار رقيب",
-                            modifier = Modifier
-                                .size(34.dp)
-                                .clip(CircleShape)
-                        )
+                        Surface(
+                            shape = CircleShape,
+                            color = Color.White,
+                            shadowElevation = 2.dp,
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Image(
+                                painter = painterResource(id = R.drawable.rqeeb_logo),
+                                contentDescription = "شعار رقيب",
+                                contentScale = ContentScale.Fit,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(2.dp)
+                            )
+                        }
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
                             Text(

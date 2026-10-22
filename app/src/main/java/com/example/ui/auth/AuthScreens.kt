@@ -94,35 +94,33 @@ fun AuthScreen(
             Spacer(modifier = Modifier.height(10.dp))
 
             // Rqeeb Logo with exact 10-tap hidden owner trigger
-            Box(
+            Surface(
+                shape = RoundedCornerShape(24.dp),
+                color = Color.White,
+                shadowElevation = 4.dp,
                 modifier = Modifier
-                    .size(92.dp)
-                    .clip(CircleShape)
-                    .background(
-                        Brush.radialGradient(
-                            listOf(
-                                MaterialTheme.colorScheme.primaryContainer,
-                                MaterialTheme.colorScheme.surface
-                            )
-                        )
-                    )
+                    .size(104.dp)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null
                     ) {
                         handleLogoTap()
                     }
-                    .testTag("app_logo_tap"),
-                contentAlignment = Alignment.Center
+                    .testTag("app_logo_tap")
             ) {
-                Image(
-                    painter = painterResource(id = R.drawable.rqeeb_logo),
-                    contentDescription = "شعار رقيب",
-                    contentScale = ContentScale.Crop,
+                Box(
                     modifier = Modifier
-                        .size(76.dp)
-                        .clip(CircleShape)
-                )
+                        .fillMaxSize()
+                        .padding(6.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Image(
+                        painter = painterResource(id = R.drawable.rqeeb_logo),
+                        contentDescription = "شعار رقيب",
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(12.dp))
