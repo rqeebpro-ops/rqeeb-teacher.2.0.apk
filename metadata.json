@@ -1,0 +1,6 @@
+{
+  "name": "رقيب",
+  "description": "رقيب مساعد المعلم الذكي لتحضير الدروس وإعداد الاختبارات وإدارة الفصول",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
