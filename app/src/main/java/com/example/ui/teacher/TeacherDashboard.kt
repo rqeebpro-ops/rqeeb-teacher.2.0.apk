@@ -60,6 +60,7 @@ enum class TeacherSection(
     EXAM_SOLVER("حل نماذج الاختبارات", "حل المسائل خطوة بخطوة مع توضيح القواعد", Icons.Default.Calculate, Color(0xFF0284C7)),
     STUDENT_PORTAL("بوابة الطلاب", "محاكاة خوض الطلاب للاختبارات الإلكترونية", Icons.Default.School, Color(0xFF10B981)),
     STATISTICS("الإحصائيات", "لوحة قياس الأداء التربوي وتحصيل الصفوف", Icons.Default.BarChart, Color(0xFF3B82F6)),
+    PRIMARY_MATH("رياضيات المرحلة الابتدائية", "إتقان الجمع بالحمل والطرح بالاستلاف وبنك مسائل", Icons.Default.Calculate, Color(0xFFE65100)),
     SETTINGS("الإعدادات", "الملف الشخصي والبيانات والمظهر", Icons.Default.Settings, Color(0xFF64748B))
 }
 
@@ -195,6 +196,12 @@ fun TeacherDashboard(
             TeacherSection.STATISTICS -> {
                 TeacherStatsScreen(
                     teacher = activeTeacher,
+                    repository = repository,
+                    onBack = { currentSection = null }
+                )
+            }
+            TeacherSection.PRIMARY_MATH -> {
+                PrimaryMathScreen(
                     repository = repository,
                     onBack = { currentSection = null }
                 )

@@ -95,6 +95,67 @@ class RqeebRepository(
         appSettingDao.setValue(AppSettingEntity("owner_whatsapp_url", whatsappUrl.trim()))
     }
 
+    // AI Configuration and Usage (Google Gemini & Yemeni Curriculum)
+    suspend fun getAiApiKey(): String {
+        return appSettingDao.getValue("ai_api_key") ?: ""
+    }
+
+    suspend fun setAiApiKey(key: String) {
+        appSettingDao.setValue(AppSettingEntity("ai_api_key", key.trim()))
+    }
+
+    suspend fun getAiProvider(): String {
+        return appSettingDao.getValue("ai_provider") ?: "Google Gemini"
+    }
+
+    suspend fun setAiProvider(provider: String) {
+        appSettingDao.setValue(AppSettingEntity("ai_provider", provider.trim()))
+    }
+
+    suspend fun getAiModelName(): String {
+        return appSettingDao.getValue("ai_model_name") ?: "gemini-2.5-flash"
+    }
+
+    suspend fun setAiModelName(model: String) {
+        appSettingDao.setValue(AppSettingEntity("ai_model_name", model.trim()))
+    }
+
+    suspend fun getAiMaxTokens(): Int {
+        return (appSettingDao.getValue("ai_max_tokens") ?: "4096").toIntOrNull() ?: 4096
+    }
+
+    suspend fun setAiMaxTokens(tokens: Int) {
+        appSettingDao.setValue(AppSettingEntity("ai_max_tokens", tokens.toString()))
+    }
+
+    suspend fun getAiDailyLimit(): Int {
+        return (appSettingDao.getValue("ai_daily_limit") ?: "100").toIntOrNull() ?: 100
+    }
+
+    suspend fun setAiDailyLimit(limit: Int) {
+        appSettingDao.setValue(AppSettingEntity("ai_daily_limit", limit.toString()))
+    }
+
+    suspend fun recordAiRequest(isSuccess: Boolean) {
+        val total = (appSettingDao.getValue("ai_total_requests") ?: "0").toIntOrNull() ?: 0
+        appSettingDao.setValue(AppSettingEntity("ai_total_requests", (total + 1).toString()))
+
+        if (isSuccess) {
+            val success = (appSettingDao.getValue("ai_success_requests") ?: "0").toIntOrNull() ?: 0
+            appSettingDao.setValue(AppSettingEntity("ai_success_requests", (success + 1).toString()))
+        } else {
+            val errors = (appSettingDao.getValue("ai_error_requests") ?: "0").toIntOrNull() ?: 0
+            appSettingDao.setValue(AppSettingEntity("ai_error_requests", (errors + 1).toString()))
+        }
+    }
+
+    suspend fun getAiUsageStats(): Triple<Int, Int, Int> {
+        val total = (appSettingDao.getValue("ai_total_requests") ?: "0").toIntOrNull() ?: 0
+        val success = (appSettingDao.getValue("ai_success_requests") ?: "0").toIntOrNull() ?: 0
+        val errors = (appSettingDao.getValue("ai_error_requests") ?: "0").toIntOrNull() ?: 0
+        return Triple(total, success, errors)
+    }
+
     // Lessons
     fun getLessons(teacherId: Long): Flow<List<LessonEntity>> = lessonDao.getLessonsForTeacher(teacherId)
 

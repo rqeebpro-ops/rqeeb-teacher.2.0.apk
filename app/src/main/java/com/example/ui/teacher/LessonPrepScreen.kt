@@ -74,6 +74,13 @@ fun LessonPrepScreen(
             if (teacher.subject.isNotBlank()) teacher.subject else YemeniCurriculum.getSubjectsForGrade(grade).first()
         )
     }
+    var term by remember { mutableStateOf<String>(YemeniCurriculum.TERMS.first()) }
+    var unitName by remember { mutableStateOf("") }
+    var isManualUnitInput by remember { mutableStateOf(false) }
+    var prepType by remember { mutableStateOf(YemeniCurriculum.PREPARATION_TYPES.first()) }
+    var studentLevel by remember { mutableStateOf(YemeniCurriculum.STUDENT_LEVELS[1]) }
+    var textbookRef by remember { mutableStateOf("") }
+
     var title by remember { mutableStateOf("") }
     var lessonDate by remember { mutableStateOf(todayDate) }
     var periodNumber by remember { mutableStateOf("الحصة الأولى") }
@@ -85,6 +92,10 @@ fun LessonPrepScreen(
     // Dropdown expanded states
     var gradeDropdownExpanded by remember { mutableStateOf(false) }
     var subjectDropdownExpanded by remember { mutableStateOf(false) }
+    var termDropdownExpanded by remember { mutableStateOf(false) }
+    var unitDropdownExpanded by remember { mutableStateOf(false) }
+    var prepTypeDropdownExpanded by remember { mutableStateOf(false) }
+    var studentLevelDropdownExpanded by remember { mutableStateOf(false) }
     var periodDropdownExpanded by remember { mutableStateOf(false) }
 
     // 4 Checkbox Selection Sets
@@ -286,16 +297,6 @@ fun LessonPrepScreen(
                         modifier = Modifier.fillMaxWidth().testTag("school_name_input")
                     )
 
-                    // Lesson Title
-                    OutlinedTextField(
-                        value = title,
-                        onValueChange = { title = it },
-                        label = { Text("عنوان وموضوع الدرس *") },
-                        placeholder = { Text("مثال: دورة الماء في الطبيعة / اسم الفاعل وصياغته / حضارة سبأ وحمير") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth().testTag("lesson_title_input")
-                    )
-
                     // Grade & Subject Dropdowns
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -325,11 +326,11 @@ fun LessonPrepScreen(
                                         onClick = {
                                             grade = g
                                             gradeDropdownExpanded = false
-                                            // Reset subject to first matching subject for this grade
                                             val validSubjects = YemeniCurriculum.getSubjectsForGrade(g)
                                             if (!validSubjects.contains(subject)) {
                                                 subject = validSubjects.first()
                                             }
+                                            unitName = ""
                                         }
                                     )
                                 }
@@ -361,6 +362,177 @@ fun LessonPrepScreen(
                                         onClick = {
                                             subject = s
                                             subjectDropdownExpanded = false
+                                            unitName = ""
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Semester & Unit Row
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        // Semester (الفصل الدراسي)
+                        Box(modifier = Modifier.weight(1f)) {
+                            OutlinedTextField(
+                                value = term,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("الفصل الدراسي *") },
+                                trailingIcon = {
+                                    IconButton(onClick = { termDropdownExpanded = true }) {
+                                        Icon(Icons.Default.ArrowDropDown, contentDescription = "اختيار الفصل")
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth().clickable { termDropdownExpanded = true }
+                            )
+                            DropdownMenu(
+                                expanded = termDropdownExpanded,
+                                onDismissRequest = { termDropdownExpanded = false }
+                            ) {
+                                YemeniCurriculum.SEMESTERS.forEach { t ->
+                                    DropdownMenuItem(
+                                        text = { Text(t) },
+                                        onClick = {
+                                            term = t
+                                            termDropdownExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        // Unit (الوحدة الدراسية)
+                        Box(modifier = Modifier.weight(1.2f)) {
+                            val availableUnitsMap = YemeniCurriculum.getCurriculumUnits(grade, subject)
+                            val availableUnits = availableUnitsMap.keys.toList()
+                            if (isManualUnitInput) {
+                                OutlinedTextField(
+                                    value = unitName,
+                                    onValueChange = { unitName = it },
+                                    label = { Text("الوحدة الدراسية (يدوي)") },
+                                    placeholder = { Text("اكتب اسم الوحدة...") },
+                                    singleLine = true,
+                                    trailingIcon = {
+                                        IconButton(onClick = { isManualUnitInput = false }) {
+                                            Icon(Icons.Default.List, contentDescription = "اختيار من القائمة")
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            } else {
+                                OutlinedTextField(
+                                    value = unitName.ifBlank { if (availableUnits.isNotEmpty()) availableUnits.first() else "الوحدة الأولى" },
+                                    onValueChange = {},
+                                    readOnly = true,
+                                    label = { Text("الوحدة الدراسية *") },
+                                    trailingIcon = {
+                                        Row {
+                                            IconButton(onClick = { unitDropdownExpanded = true }) {
+                                                Icon(Icons.Default.ArrowDropDown, contentDescription = "اختيار الوحدة")
+                                            }
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxWidth().clickable { unitDropdownExpanded = true }
+                                )
+                                DropdownMenu(
+                                    expanded = unitDropdownExpanded,
+                                    onDismissRequest = { unitDropdownExpanded = false }
+                                ) {
+                                    availableUnits.forEach { u ->
+                                        DropdownMenuItem(
+                                            text = { Text(u) },
+                                            onClick = {
+                                                unitName = u
+                                                unitDropdownExpanded = false
+                                            }
+                                        )
+                                    }
+                                    HorizontalDivider()
+                                    DropdownMenuItem(
+                                        text = { Text("✏️ كتابة عنوان وحدة يدوي...", fontWeight = FontWeight.Bold) },
+                                        onClick = {
+                                            isManualUnitInput = true
+                                            unitDropdownExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Lesson Title
+                    OutlinedTextField(
+                        value = title,
+                        onValueChange = { title = it },
+                        label = { Text("عنوان وموضوع الدرس *") },
+                        placeholder = { Text("مثال: دورة الماء في الطبيعة / اسم الفاعل وصياغته / حضارة سبأ وحمير") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("lesson_title_input")
+                    )
+
+                    // Preparation Type & Student Level Row
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        // Preparation Type (نوع التحضير)
+                        Box(modifier = Modifier.weight(1f)) {
+                            OutlinedTextField(
+                                value = prepType,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("نوع التحضير *") },
+                                trailingIcon = {
+                                    IconButton(onClick = { prepTypeDropdownExpanded = true }) {
+                                        Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth().clickable { prepTypeDropdownExpanded = true }
+                            )
+                            DropdownMenu(
+                                expanded = prepTypeDropdownExpanded,
+                                onDismissRequest = { prepTypeDropdownExpanded = false }
+                            ) {
+                                YemeniCurriculum.PREPARATION_TYPES.forEach { pt ->
+                                    DropdownMenuItem(
+                                        text = { Text(pt) },
+                                        onClick = {
+                                            prepType = pt
+                                            prepTypeDropdownExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        // Student Level (مستوى الطلاب)
+                        Box(modifier = Modifier.weight(1f)) {
+                            OutlinedTextField(
+                                value = studentLevel,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("مستوى الطلاب *") },
+                                trailingIcon = {
+                                    IconButton(onClick = { studentLevelDropdownExpanded = true }) {
+                                        Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth().clickable { studentLevelDropdownExpanded = true }
+                            )
+                            DropdownMenu(
+                                expanded = studentLevelDropdownExpanded,
+                                onDismissRequest = { studentLevelDropdownExpanded = false }
+                            ) {
+                                YemeniCurriculum.STUDENT_LEVELS.forEach { sl ->
+                                    DropdownMenuItem(
+                                        text = { Text(sl) },
+                                        onClick = {
+                                            studentLevel = sl
+                                            studentLevelDropdownExpanded = false
                                         }
                                     )
                                 }
@@ -430,13 +602,42 @@ fun LessonPrepScreen(
                             },
                             modifier = Modifier.weight(1.1f)
                         )
+
+                        // Duration (Minutes)
+                        OutlinedTextField(
+                            value = "$durationMinutes د",
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("زمن الحصة") },
+                            trailingIcon = {
+                                Row {
+                                    IconButton(onClick = { if (durationMinutes > 30) durationMinutes -= 5 }) {
+                                        Icon(Icons.Default.Remove, contentDescription = "تقليل")
+                                    }
+                                    IconButton(onClick = { if (durationMinutes < 90) durationMinutes += 5 }) {
+                                        Icon(Icons.Default.Add, contentDescription = "زيادة")
+                                    }
+                                }
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
                     }
+
+                    // Educational Reference / Textbook edition
+                    OutlinedTextField(
+                        value = textbookRef,
+                        onValueChange = { textbookRef = it },
+                        label = { Text("المرجع الدراسي / طبعة الكتاب المعتمدة") },
+                        placeholder = { Text("كتاب $subject للصف $grade - وزارة التربية والتعليم اليمنية") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
 
                     // Textbook / Reference Content (optional)
                     OutlinedTextField(
                         value = contentSource,
                         onValueChange = { contentSource = it },
-                        label = { Text("مرجع كتاب المنهج أو الفقرات المرفوعة (اختياري)") },
+                        label = { Text("نصوص إضافية من كتاب المنهج (اختياري)") },
                         placeholder = { Text("الصق هنا فقرات من الكتاب المدرسي لترتكز الخطة على نصوص المنهج المعتمد...") },
                         minLines = 2,
                         modifier = Modifier.fillMaxWidth().testTag("content_source_input")
@@ -531,6 +732,11 @@ fun LessonPrepScreen(
                             period = periodNumber,
                             periodsCount = periodsCount,
                             duration = durationMinutes,
+                            unit = unitName,
+                            term = term,
+                            prepType = prepType,
+                            studentLevel = studentLevel,
+                            textbookRef = textbookRef,
                             selectedTeacherStyles = selectedTeacherStyles.toList(),
                             selectedTeachingMethods = selectedTeachingMethods.toList(),
                             selectedSkillsAndValues = selectedSkillsAndValues.toList(),
@@ -683,7 +889,7 @@ fun LessonPrepScreen(
                                 modifier = Modifier.fillMaxWidth().testTag("edit_notes_input")
                             )
                         } else {
-                            // Official Yemeni Preparation Table View
+                            // Official Yemeni Preparation Table View (18 Full Sections)
                             OfficialPreparationView(
                                 schoolName = schoolName,
                                 teacherName = teacher.fullName,
@@ -694,6 +900,11 @@ fun LessonPrepScreen(
                                 period = periodNumber,
                                 periodsCount = periodsCount,
                                 durationMinutes = durationMinutes,
+                                unitName = unitName,
+                                term = term,
+                                prepType = prepType,
+                                studentLevel = studentLevel,
+                                textbookRef = textbookRef,
                                 cognitive = editCognitive,
                                 skill = editSkill,
                                 affective = editAffective,
@@ -705,7 +916,8 @@ fun LessonPrepScreen(
                                 steps = editSteps,
                                 assessment = editAssessment,
                                 homework = editHomework,
-                                notes = editTeacherNotes
+                                notes = editTeacherNotes,
+                                plan = plan
                             )
                         }
 
@@ -1114,7 +1326,7 @@ private fun CheckboxGroupCard(
 }
 
 /**
- * Official Yemeni Preparation Book View (8 Sections & 5-Column Table)
+ * Official Yemeni Preparation Book View (Comprehensive 18 Sections & 5-Column Table)
  */
 @Composable
 private fun OfficialPreparationView(
@@ -1127,6 +1339,11 @@ private fun OfficialPreparationView(
     period: String,
     periodsCount: Int,
     durationMinutes: Int,
+    unitName: String,
+    term: String,
+    prepType: String,
+    studentLevel: String,
+    textbookRef: String,
     cognitive: String,
     skill: String,
     affective: String,
@@ -1138,40 +1355,56 @@ private fun OfficialPreparationView(
     steps: List<LessonPlanStep>,
     assessment: String,
     homework: String,
-    notes: String
+    notes: String,
+    plan: LessonPlanResult? = null
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        // أ. البيانات الأساسية
+        // 1. البيانات الأساسية
         Card(
-            shape = RoundedCornerShape(10.dp),
+            shape = RoundedCornerShape(12.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
         ) {
             Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("أ. البيانات الأساسية", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 13.sp)
+                Text("1. البيانات الأساسية (المنهج اليمني الرسمي)", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 13.5.sp)
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text("المدرسة: $schoolName", fontSize = 12.sp)
-                    Text("الصف: $grade", fontSize = 12.sp)
-                }
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("المادة: $subject", fontSize = 12.sp)
-                    Text("رقم الحصة: $period ($periodsCount حصص)", fontSize = 12.sp)
-                }
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("التاريخ: $date", fontSize = 12.sp)
                     Text("المعلم: $teacherName", fontSize = 12.sp)
+                }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("الصف: $grade", fontSize = 12.sp)
+                    Text("المادة: $subject", fontSize = 12.sp)
+                }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("الفصل: $term", fontSize = 12.sp)
+                    Text("الوحدة: ${unitName.ifBlank { "الوحدة الأولى" }}", fontSize = 12.sp)
+                }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("رقم الحصة: $period ($periodsCount حصص)", fontSize = 12.sp)
+                    Text("زمن الحصة: $durationMinutes دقيقة", fontSize = 12.sp)
+                }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("نوع التحضير: $prepType", fontSize = 12.sp)
+                    Text("مستوى الطلاب: $studentLevel", fontSize = 12.sp)
+                }
+                if (textbookRef.isNotBlank()) {
+                    Text("المرجع: $textbookRef", fontSize = 11.5.sp, color = MaterialTheme.colorScheme.secondary)
                 }
             }
         }
 
-        // ب. الأهداف التعليمية
+        // 2. الأهداف التعليمية العامة والخاصة
         Card(
-            shape = RoundedCornerShape(10.dp),
+            shape = RoundedCornerShape(12.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
         ) {
             Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("ب. الأهداف التعليمية والسلوكية", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 13.sp)
+                Text("2. الأهداف التعليمية العامة والخاصة", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 13.5.sp)
+                if (plan != null && plan.generalObjectives.isNotBlank()) {
+                    Text("• الأهداف العامة:", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = MaterialTheme.colorScheme.secondary)
+                    Text(plan.generalObjectives, fontSize = 12.sp, lineHeight = 18.sp)
+                }
                 if (cognitive.isNotBlank()) {
                     Text("• الأهداف المعرفية:", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = MaterialTheme.colorScheme.secondary)
                     Text(cognitive, fontSize = 12.sp, lineHeight = 18.sp)
@@ -1187,36 +1420,78 @@ private fun OfficialPreparationView(
             }
         }
 
-        // ج. الأساليب والطرق والوسائل المختارة فقط
-        Card(
-            shape = RoundedCornerShape(10.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-        ) {
-            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("ج. الخيارات المحددة المستخدمة فقط في الدرس", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 13.sp)
-                Text("• أساليب المعلم المختارة: ${selectedStyles.joinToString("، ")}", fontSize = 12.sp, lineHeight = 17.sp)
-                Text("• طرق التدريس المختارة: ${selectedMethods.joinToString("، ")}", fontSize = 12.sp, lineHeight = 17.sp)
-                Text("• المهارات والقيم المستهدفة: ${selectedSkills.joinToString("، ")}", fontSize = 12.sp, lineHeight = 17.sp)
-                Text("• الوسائل التعليمية المعتمدة: ${selectedAids.joinToString("، ")}", fontSize = 12.sp, lineHeight = 17.sp)
+        // 3. نواتج التعلم المتوقعة
+        if (plan != null && plan.learningOutcomes.isNotBlank()) {
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("3. نواتج التعلم المتوقعة بنهاية الحصة", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 13.5.sp)
+                    Text(plan.learningOutcomes, fontSize = 12.sp, lineHeight = 18.sp)
+                }
             }
         }
 
-        // د. التمهيد (5 دقائق)
+        // 4. المتطلبات السابقة للدرس
+        if (plan != null && plan.prerequisites.isNotBlank()) {
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("4. المتطلبات والخبرات السابقة اللازمة", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 13.5.sp)
+                    Text(plan.prerequisites, fontSize = 12.sp, lineHeight = 18.sp)
+                }
+            }
+        }
+
+        // 5. التمهيد والتهيئة
         Card(
-            shape = RoundedCornerShape(10.dp),
+            shape = RoundedCornerShape(12.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
         ) {
             Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("د. التهيئة والتمهيد (5 دقائق)", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 13.sp)
+                Text("5. التهيئة والتمهيد لجذب انتباه الطلاب (5 دقائق)", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 13.5.sp)
                 Text(introduction, fontSize = 12.sp, lineHeight = 18.sp)
             }
         }
 
-        // هـ. خطوات عرض الدرس في جدول تربوي رسمي (5 أعمدة)
+        // 6. الوسائل التعليمية وطرق التدريس
         Card(
-            shape = RoundedCornerShape(10.dp),
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        ) {
+            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("6. الأساليب والطرق والوسائل التعليمية المعتمدة", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 13.5.sp)
+                Text("• أساليب المعلم: ${selectedStyles.joinToString("، ")}", fontSize = 12.sp, lineHeight = 17.sp)
+                Text("• طرق التدريس: ${selectedMethods.joinToString("، ")}", fontSize = 12.sp, lineHeight = 17.sp)
+                Text("• المهارات والقيم: ${selectedSkills.joinToString("، ")}", fontSize = 12.sp, lineHeight = 17.sp)
+                Text("• الوسائل المعينة: ${selectedAids.joinToString("، ")}", fontSize = 12.sp, lineHeight = 17.sp)
+            }
+        }
+
+        // 7. المفاهيم والمصطلحات الأساسية
+        if (plan != null && plan.keyConcepts.isNotBlank()) {
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("7. المفاهيم والمصطلحات الأساسية في الدرس", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 13.5.sp)
+                    Text(plan.keyConcepts, fontSize = 12.sp, lineHeight = 18.sp)
+                }
+            }
+        }
+
+        // 8. خطوات عرض الدرس في جدول تربوي رسمي (5 أعمدة)
+        Card(
+            shape = RoundedCornerShape(12.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
             border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f))
         ) {
@@ -1227,10 +1502,10 @@ private fun OfficialPreparationView(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        "هـ. خطوات عرض الدرس (جدول دفتر التحضير الرسمي)",
+                        "8. خطوات عرض وتدريس الحصة (جدول دفتر التحضير الرسمي)",
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary,
-                        fontSize = 13.sp
+                        fontSize = 13.5.sp
                     )
                     Surface(
                         shape = RoundedCornerShape(6.dp),
@@ -1294,40 +1569,151 @@ private fun OfficialPreparationView(
             }
         }
 
-        // و. التقويم
-        Card(
-            shape = RoundedCornerShape(10.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-        ) {
-            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("و. التقويم (المعرفي، المهاري، الوجداني)", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 13.sp)
-                Text(assessment, fontSize = 12.sp, lineHeight = 18.sp)
+        // 9. دور المعلم ودور الطلاب
+        if (plan != null && plan.teacherAndStudentRole.isNotBlank()) {
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("9. تكامل الأدوار (دور المعلم ودور الطلاب في الموقف التعليمي)", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 13.5.sp)
+                    Text(plan.teacherAndStudentRole, fontSize = 12.sp, lineHeight = 18.sp)
+                }
             }
         }
 
-        // ز. الواجب المنزلي
+        // 10. أمثلة محلولة مناسبة للصف
+        if (plan != null && plan.solvedExamples.isNotBlank()) {
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("10. أمثلة محلولة ونماذج تطبيقية متدرجة الصعوبة", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 13.5.sp)
+                    Text(plan.solvedExamples, fontSize = 12.sp, lineHeight = 18.sp)
+                }
+            }
+        }
+
+        // 11. أنشطة صفية وفردية وجماعية
+        if (plan != null && plan.classroomActivities.isNotBlank()) {
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("11. أنشطة التعلم (فردية، ثنائية، وجماعية)", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 13.5.sp)
+                    Text(plan.classroomActivities, fontSize = 12.sp, lineHeight = 18.sp)
+                }
+            }
+        }
+
+        // 12. أسئلة أثناء الشرح للتحقق من الفهم
+        if (plan != null && plan.questionsDuringExplanation.isNotBlank()) {
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("12. أسئلة التغذية الراجعة والتحقق الفوري أثناء الشرح", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 13.5.sp)
+                    Text(plan.questionsDuringExplanation, fontSize = 12.sp, lineHeight = 18.sp)
+                }
+            }
+        }
+
+        // 13. مراعاة الفروق الفردية
+        if (plan != null && plan.individualDifferences.isNotBlank()) {
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("13. خطة مراعاة الفروق الفردية (دعم المتعثرين + إثراء الموهوبين)", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 13.5.sp)
+                    Text(plan.individualDifferences, fontSize = 12.sp, lineHeight = 18.sp)
+                }
+            }
+        }
+
+        // 14. أخطاء الطلاب المتوقعة ومعالجتها
+        if (plan != null && plan.expectedErrorsAndRemediation.isNotBlank()) {
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("14. الأخطاء المفاهيمية الشائعة وطرق التدخل العلاجي", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 13.5.sp)
+                    Text(plan.expectedErrorsAndRemediation, fontSize = 12.sp, lineHeight = 18.sp)
+                }
+            }
+        }
+
+        // 15. التقويم القبلي والتكويني والختامي
         Card(
-            shape = RoundedCornerShape(10.dp),
+            shape = RoundedCornerShape(12.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
         ) {
-            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("ز. الواجب المنزلي أو النشاط اللاصفي", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 13.sp)
+            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("15. استراتيجيات التقويم التربوي (قبلي، بنائي/تكويني، وختامي)", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 13.5.sp)
+                if (plan != null && plan.assessmentPreFormativeSummative.isNotBlank()) {
+                    Text(plan.assessmentPreFormativeSummative, fontSize = 12.sp, lineHeight = 18.sp)
+                } else {
+                    Text(assessment, fontSize = 12.sp, lineHeight = 18.sp)
+                }
+            }
+        }
+
+        // 16. الواجب المنزلي
+        Card(
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        ) {
+            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("16. الواجب المنزلي والأنشطة اللاصفية", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 13.5.sp)
                 Text(homework, fontSize = 12.sp, lineHeight = 18.sp)
             }
         }
 
-        // ح. الملاحظات
+        // 17. ملخص الدرس
+        if (plan != null && plan.lessonSummary.isNotBlank()) {
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("17. ملخص وخلاصة الدرس السبورية", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 13.5.sp)
+                    Text(plan.lessonSummary, fontSize = 12.sp, lineHeight = 18.sp)
+                }
+            }
+        }
+
+        // 18. الإجابات النموذجية وملاحظات المعلم وتوزيع الوقت
         Card(
-            shape = RoundedCornerShape(10.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)),
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
         ) {
-            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("ح. ملاحظات المعلم بعد تنفيذ الدرس", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 13.sp)
+            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("18. الإجابات النموذجية وتوزيع الوقت وملاحظات المعلم", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 13.5.sp)
+                if (plan != null && plan.modelAnswers.isNotBlank()) {
+                    Text("• حلول الأنشطة والأسئلة:", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = MaterialTheme.colorScheme.secondary)
+                    Text(plan.modelAnswers, fontSize = 12.sp, lineHeight = 18.sp)
+                }
+                if (plan != null && plan.timeDistribution.isNotBlank()) {
+                    Text("• خطة توزيع وقت الحصة:", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = MaterialTheme.colorScheme.secondary)
+                    Text(plan.timeDistribution, fontSize = 12.sp, lineHeight = 18.sp)
+                }
+                Text("• ملاحظات المعلم بعد تنفيذ الدرس:", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = MaterialTheme.colorScheme.secondary)
                 Text(
-                    if (notes.isNotBlank()) notes else "مساحة مخصصة للمعلم لتدوين الملاحظات والصعوبات بعد انتهاء الحصة...",
+                    if (notes.isNotBlank()) notes else "مساحة مخصصة للمعلم لتدوين الملاحظات والانطباعات بعد انتهاء الحصة...",
                     fontSize = 12.sp,
                     color = if (notes.isNotBlank()) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
                 )

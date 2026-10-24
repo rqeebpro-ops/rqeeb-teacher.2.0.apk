@@ -161,9 +161,16 @@ data class QuestionVariantSet(
 enum class QuestionType(val titleAr: String) {
     MULTIPLE_CHOICE("اختيار من متعدد"),
     TRUE_FALSE("صح أو خطأ"),
-    FILL_BLANKS("إكمال الفراغ"),
-    SHORT_ANSWER("إجابة قصيرة"),
-    ESSAY("سؤال مقالي")
+    FILL_BLANKS("أكمل الفراغ"),
+    SHORT_ANSWER("أسئلة مباشرة وإجابة قصيرة"),
+    ESSAY("سؤال مقالي"),
+    GIVE_REASON("علّل / اذكر السبب"),
+    MENTION("اذكر / عدّد"),
+    COMPARE("قارن بين"),
+    REORDER("رتّب الخطوات أو المفاهيم"),
+    MATH_PROBLEM("مسألة حسابية وتطبيقية"),
+    APPLICATION_INFERENCE("تطبيق واستنتاج"),
+    DIAGRAM_TABLE("سؤال مرتبط برسم أو جدول")
 }
 
 /**

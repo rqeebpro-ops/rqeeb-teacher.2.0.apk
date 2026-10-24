@@ -13,7 +13,13 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
-class GeminiService {
+class GeminiService(
+    private var repository: com.example.data.repository.RqeebRepository? = null
+) {
+
+    fun setRepository(repo: com.example.data.repository.RqeebRepository) {
+        this.repository = repo
+    }
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(60, TimeUnit.SECONDS)
@@ -22,6 +28,17 @@ class GeminiService {
         .build()
 
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
+
+    suspend fun getEffectiveApiKey(): String {
+        val repoKey = repository?.getAiApiKey() ?: ""
+        if (repoKey.isNotBlank()) return repoKey
+        return try {
+            val key = BuildConfig.GEMINI_API_KEY
+            if (key == "MY_GEMINI_API_KEY" || key.isBlank()) "" else key
+        } catch (e: Exception) {
+            ""
+        }
+    }
 
     fun getApiKey(): String {
         return try {
@@ -32,21 +49,120 @@ class GeminiService {
         }
     }
 
+    suspend fun getEffectiveModelName(): String {
+        return repository?.getAiModelName()?.ifBlank { "gemini-2.5-flash" } ?: "gemini-2.5-flash"
+    }
+
     fun isConfigured(): Boolean = getApiKey().isNotBlank()
+
+    data class AiConnectionDiagnostic(
+        val isSuccess: Boolean,
+        val message: String,
+        val statusCode: Int = if (isSuccess) 200 else 400,
+        val modelName: String = "gemini-2.5-flash",
+        val provider: String = "Google Generative Language API (REST)"
+    )
+
+    /**
+     * Test real connection to Gemini API with detailed diagnostic results
+     */
+    suspend fun testConnection(
+        apiKeyInput: String? = null,
+        modelNameInput: String? = null
+    ): AiConnectionDiagnostic = withContext(Dispatchers.IO) {
+        val key = apiKeyInput?.takeIf { it.isNotBlank() } ?: getEffectiveApiKey()
+        val model = modelNameInput?.takeIf { it.isNotBlank() } ?: getEffectiveModelName()
+
+        if (key.isBlank()) {
+            return@withContext AiConnectionDiagnostic(
+                isSuccess = false,
+                message = "مفتاح API غير متوفر. يرجى إدخال مفتاح API في الإعدادات أو لوحة Secrets.",
+                statusCode = 401,
+                modelName = model
+            )
+        }
+
+        try {
+            val testJson = JSONObject().apply {
+                val contentsArray = JSONArray().apply {
+                    val contentObj = JSONObject().apply {
+                        val partsArray = JSONArray().apply {
+                            put(JSONObject().put("text", "مرحباً، هذا فحص اتصال من تطبيق رقيب للمعلم اليمني. أجب بكلمة واحدة: جاهز."))
+                        }
+                        put("parts", partsArray)
+                    }
+                    put(contentObj)
+                }
+                put("contents", contentsArray)
+            }
+
+            val url = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$key"
+            val request = Request.Builder()
+                .url(url)
+                .post(testJson.toString().toRequestBody(jsonMediaType))
+                .build()
+
+            val response = client.newCall(request).execute()
+            val responseCode = response.code
+            val bodyString = response.body?.string().orEmpty()
+
+            if (response.isSuccessful) {
+                repository?.recordAiRequest(isSuccess = true)
+                AiConnectionDiagnostic(
+                    isSuccess = true,
+                    message = "الاتصال ناجح ومؤكد بنموذج $model عبر Google Generative Language API!",
+                    statusCode = responseCode,
+                    modelName = model
+                )
+            } else {
+                repository?.recordAiRequest(isSuccess = false)
+                val errorMessage = when (responseCode) {
+                    400 -> {
+                        if (bodyString.contains("API_KEY_INVALID", ignoreCase = true) || bodyString.contains("key not valid", ignoreCase = true)) {
+                            "المفتاح غير صالح أو غير مفعّل (API_KEY_INVALID). يرجى التأكد من نسخه بدقة من Google AI Studio."
+                        } else {
+                            "خطأ في إعدادات الطلب (رمز 400). يرجى التأكد من اسم النموذج والمفتاح."
+                        }
+                    }
+                    403 -> "تم رفض الوصول (رمز 403): صلاحيات المفتاح غير كافية أو تم تقييد الوصول."
+                    404 -> "النموذج '$model' غير مدعوم أو غير متاح في منطقتك (رمز 404). جرب نموذج gemini-2.5-flash."
+                    429 -> "تم تجاوز حد الاستخدام المسموح أو استنفاد الحصة المجانية لمفتاح API (رمز 429 - Quota Exceeded)."
+                    500, 503 -> "خادم Google AI يواجه ضغطاً مؤقتاً (رمز $responseCode). يرجى المحاولة لاحقاً."
+                    else -> "فشل الاتصال بالخادم (رمز $responseCode): ${response.message}"
+                }
+                AiConnectionDiagnostic(
+                    isSuccess = false,
+                    message = errorMessage,
+                    statusCode = responseCode,
+                    modelName = model
+                )
+            }
+        } catch (e: Exception) {
+            repository?.recordAiRequest(isSuccess = false)
+            AiConnectionDiagnostic(
+                isSuccess = false,
+                message = "تعذر الاتصال بالإنترنت أو الخادم: ${e.localizedMessage ?: "انقطاع في الشبكة"}",
+                statusCode = 0,
+                modelName = model
+            )
+        }
+    }
 
     /**
      * Call Gemini REST API directly
      */
     suspend fun generateContent(
         prompt: String,
-        systemInstruction: String = "أنت 'رقيب - مساعد المعلم الذكي'، خبير تربوي وتعليمي متخصص في المناهج العربية وطرائق التدريس الحديثة وصياغة الاختبارات المعيارية."
+        systemInstruction: String = "أنت 'رقيب - مساعد المعلم الذكي'، خبير تربوي وتعليمي متخصص في المناهج اليمنية وطرائق التدريس وصياغة الاختبارات المدرسية المعتمدة."
     ): Result<String> = withContext(Dispatchers.IO) {
-        val apiKey = getApiKey()
+        val apiKey = getEffectiveApiKey()
         if (apiKey.isBlank()) {
             return@withContext Result.failure(
-                IllegalStateException("مفتاح Gemini API غير مهيأ. يرجى إضافة GEMINI_API_KEY في لوحة Secrets.")
+                IllegalStateException("مفتاح Gemini API غير مهيأ. يرجى إضافة المفتاح في إعدادات المالك أو لوحة Secrets.")
             )
         }
+
+        val modelName = getEffectiveModelName()
 
         try {
             val requestJson = JSONObject().apply {
@@ -72,8 +188,7 @@ class GeminiService {
                 }
             }
 
-            // Using gemini-2.5-flash as modern fast model
-            val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$apiKey"
+            val url = "https://generativelanguage.googleapis.com/v1beta/models/$modelName:generateContent?key=$apiKey"
             val request = Request.Builder()
                 .url(url)
                 .post(requestJson.toString().toRequestBody(jsonMediaType))
@@ -83,10 +198,13 @@ class GeminiService {
             val responseBody = response.body?.string()
 
             if (!response.isSuccessful || responseBody == null) {
+                repository?.recordAiRequest(isSuccess = false)
                 return@withContext Result.failure(
                     Exception("خطأ في استجابة الخادم (${response.code}): ${response.message}")
                 )
             }
+
+            repository?.recordAiRequest(isSuccess = true)
 
             val parsedJson = JSONObject(responseBody)
             val candidates = parsedJson.optJSONArray("candidates")
@@ -102,12 +220,14 @@ class GeminiService {
 
             Result.failure(Exception("لم يتم استلام نص من نموذج الذكاء الاصطناعي."))
         } catch (e: Exception) {
+            repository?.recordAiRequest(isSuccess = false)
             Result.failure(e)
         }
     }
 
     /**
      * AI Lesson Plan Generator tailored for Yemeni School Curriculum with strict teacher options
+     * Generates a complete 18-section formal lesson plan aligned with Yemeni Ministry of Education guidelines.
      */
     suspend fun generateLessonPlan(
         schoolName: String = "",
@@ -119,6 +239,11 @@ class GeminiService {
         period: String = "الحصة الأولى",
         periodsCount: Int = 1,
         duration: Int = 45,
+        unit: String = "",
+        term: String = "الفصل الدراسي الأول",
+        prepType: String = "تحضير يومي",
+        studentLevel: String = "متوسط (عام)",
+        textbookRef: String = "",
         selectedTeacherStyles: List<String> = emptyList(),
         selectedTeachingMethods: List<String> = emptyList(),
         selectedSkillsAndValues: List<String> = emptyList(),
@@ -133,80 +258,98 @@ class GeminiService {
         val aidsStr = if (selectedTeachingAids.isNotEmpty()) selectedTeachingAids.joinToString("، ") else "الكتاب المدرسي، السبورة والطباشير"
 
         val prompt = """
-            أنت خبير تربوي متخصص في المناهج والمدارس اليمنية. قم بإعداد خطة تحضير درس رسمي مطابق للنموذج المعتمد في الجمهورية اليمنية:
+            أنت خبير تربوي وموجه عام في وزارة التربية والتعليم بالجمهورية اليمنية.
+            قم بإعداد خطة تحضير درس نموذجية ومتكاملة وفق النموذج الرسمي المعتمد في المدارس اليمنية، تشمل العناصر الـ 18 الإلزامية:
             
-            [البيانات الأساسية]
+            [البيانات الأساسية والتربوية]
             - المدرسة: ${schoolName.ifBlank { "المدرسة النموذجية" }}
-            - اسم المعلم: ${teacherName.ifBlank { "معلم المادة" }}
+            - المعلم: ${teacherName.ifBlank { "معلم المادة" }}
             - المادة: $subject
-            - الصف الدراسي: $grade
-            - عنوان وموضوع الدرس: $title
+            - المرحلة والصف: $grade
+            - الفصل الدراسي: $term
+            - الوحدة الدراسية: ${unit.ifBlank { "الوحدة الأولى" }}
+            - عنوان الدرس: $title
             - التاريخ: ${date.ifBlank { "اليوم" }}
             - رقم الحصة: $period
             - عدد الحصص: $periodsCount
             - زمن الحصة: $duration دقيقة
-            - محتوى أو مرجع الكتاب المستند إليه: ${contentSource.ifBlank { "كتاب وزارة التربية والتعليم - المنهج اليمني" }}
+            - مستوى الطلاب المستهدف: $studentLevel
+            - نوع التحضير: $prepType
+            - المرجع وكتاب الوزارة: ${textbookRef.ifBlank { contentSource.ifBlank { "كتاب وزارة التربية والتعليم اليمني المعتمد" } }}
 
-            [الخيارات التربوية المحددة حصراً من قبل المعلم]:
+            [الخيارات التربوية المحددة من المعلم]:
             1. أساليب المعلم المختارة فقط: $stylesStr
             2. طرق التدريس المختارة فقط: $methodsStr
-            3. المهارات والقيم المستهدفة فقط: $skillsStr
-            4. الوسائل التعليمية المختارة فقط: $aidsStr
-            ${if (objectivesInput.isNotBlank()) "5. مقترح أهداف إضافية: $objectivesInput" else ""}
+            3. المهارات والقيم المستهدفة: $skillsStr
+            4. الوسائل التعليمية المعتمدة: $aidsStr
+            ${if (objectivesInput.isNotBlank()) "5. مقترحات إضافية من المعلم: $objectivesInput" else ""}
 
-            [قواعد إلزامية صارمة]:
-            1. لا تضف أي أسلوب أو طريقة تدريس أو مهارة أو وسيلة لم يخترها المعلم أعلاه نهائياً.
-            2. اعرض في التحضير النهائي العناصر المحددة فقط.
-            3. ابنِ التمهيد (5 دقائق) والأنشطة وخطوات الدرس وأسئلة التقويم على اختيارات المعلم أعلاه حصراً.
-            4. قسّم الأهداف إلى: أهداف معرفية، أهداف مهارية، أهداف وجدانية وقيمية تناسب السياق اليمني.
-            5. أنشئ جدول خطوات عرض الدرس المكون من 4 إلى 5 مراحل رئيسية تشمل:
-               - المرحلة والزمن
-               - إجراءات المعلم
-               - نشاط التلميذ
-               - الوسيلة المستخدمة (من الوسائل المختارة فقط)
-               - الأسلوب أو طريقة التدريس (من المختارة فقط)
-            6. التقويم: أسئلة تقيس الأهداف المعرفية والمهارية والوجدانية.
-            7. الواجب المنزلي: نشاط صفي أو لاصفي من الكتاب المدرسي.
+            [قواعد إعداد التحضير]:
+            1. الالتزام الدقيق بالمنهج اليمني وطبيعة المرحلة الدراسية ($grade).
+            2. صياغة أهداف سلوكية إجرائية قابلة للقياس (معرفية، مهارية، وجدانية).
+            3. تحديد نواتج التعلم المتوقعة بدقة.
+            4. تمهيد وتهيئة مشوقة (5 دقائق) يربط الدرس بالحياة والبيئة اليمنية.
+            5. ذكر المفاهيم والمصطلحات الأساسية للدرس بوضوح.
+            6. خطوات الشرح التفصيلية وتوزيع زمن الحصة ($duration دقيقة).
+            7. أمثلة محلولة متدرجة من السهل إلى الأصعب.
+            8. أنشطة صفية (فردية وجماعية).
+            9. أسئلة أثناء الشرح للتحقق من الفهم الفوري.
+            10. مراعاة الفروق الفردية (دعم للمبتدئين وتحدي للمتقدمين).
+            11. معالجة الأخطاء الشائعة المتوقعة للطلاب.
+            12. التقويم القبلي والتكويني والختامي والواجب المنزلي ونموذج الإجابة.
 
             أعد النتيجة بصيغة JSON حصراً بهذا النسق البرمجي:
             {
               "cognitiveObjectives": "1. أن يذكر الطالب...\n2. أن يوضح الطالب...",
-              "skillObjectives": "1. أن يطبق الطالب...\n2. أن يرسم/يحلل الطالب...",
-              "affectiveObjectives": "1. أن يستشعر الطالب عظمة الخالق والقيم الوطنية اليمنية...",
+              "skillObjectives": "1. أن يطبق الطالب...\n2. أن يحلل الطالب...",
+              "affectiveObjectives": "1. أن يستشعر الطالب القيم الإيمانية والوطنية اليمنية...",
+              "learningOutcomes": "1. فهم واستيعاب مفاهيم الدرس وتطبيقها عملياً\n2. القدرة على حل التدريبات المقررة",
+              "previousKnowledge": "مراجعة المتطلبات السابقة المرتبطة بالدرس من الصفوف السابقة (3 دقائق)",
               "introduction5Min": "تمهيد 5 دقائق يربط الدرس بالواقع ويبدأ بالأساليب المختارة...",
+              "teachingMaterials": "$aidsStr",
+              "keyConcepts": "المفاهيم المحورية للدرس وتعريفاتها الدقيقة...",
               "steps": [
                 {
                   "stageAndTime": "التهيئة والتمهيد (5 د)",
-                  "teacherActions": "طرح سؤال استهلالي وفق الأسلوب المختار...",
-                  "studentActivities": "التفاعل والإجابة وتدوين الأفكار...",
+                  "teacherActions": "طرح سؤال استهلالي مشوق وفق الأسلوب المختار...",
+                  "studentActivities": "التفاعل والمناقشة الاستهلالية...",
                   "materialsUsed": "${selectedTeachingAids.firstOrNull() ?: "الكتاب المدرسي"}",
                   "teachingMethod": "${selectedTeacherStyles.firstOrNull() ?: "الحوار والمناقشة"}"
                 },
                 {
-                  "stageAndTime": "عرض المفهوم والشرح (18 د)",
-                  "teacherActions": "شرح الخطوات المحورية...",
-                  "studentActivities": "المتابعة والمشاركة النشطة...",
-                  "materialsUsed": "${selectedTeachingAids.getOrNull(1) ?: selectedTeachingAids.firstOrNull() ?: "السبورة والطباشير"}",
+                  "stageAndTime": "عرض وشرح المفهوم (18 د)",
+                  "teacherActions": "شرح المحاور الأساسية وعرض المفاهيم بالتدرج...",
+                  "studentActivities": "المتابعة والمشاركة النشطة وتدوين النقاط...",
+                  "materialsUsed": "${selectedTeachingAids.getOrNull(1) ?: selectedTeachingAids.firstOrNull() ?: "السبورة"}",
                   "teachingMethod": "${selectedTeachingMethods.firstOrNull() ?: "حل المشكلات"}"
                 },
                 {
-                  "stageAndTime": "النشاط التطبيقي (14 د)",
-                  "teacherActions": "توجيه النشاط وفق طرق التدريس المختارة...",
-                  "studentActivities": "العمل والتطبيق في ضوء المهارات المحددة...",
+                  "stageAndTime": "الأنشطة والتطبيق (14 د)",
+                  "teacherActions": "توجيه النشاط التعاوني والفردي وتقديم الدعم...",
+                  "studentActivities": "العمل والتطبيق وحل التدريبات في مجموعات...",
                   "materialsUsed": "${selectedTeachingAids.lastOrNull() ?: "أوراق عمل"}",
                   "teachingMethod": "${selectedTeachingMethods.lastOrNull() ?: "التعلم التعاوني"}"
                 },
                 {
                   "stageAndTime": "التقويم الختامي والغلق (8 د)",
-                  "teacherActions": "طرح أسئلة التحقق وقياس المخرجات...",
-                  "studentActivities": "تقديم الإجابات وتقييم الأقران...",
+                  "teacherActions": "طرح أسئلة التحقق وقياس المخرجات وتلخيص الدرس...",
+                  "studentActivities": "تقديم الإجابات وتقييم الأقران وتلخيص الدرس...",
                   "materialsUsed": "${selectedTeachingAids.firstOrNull() ?: "الكتاب المدرسي"}",
                   "teachingMethod": "${selectedTeacherStyles.lastOrNull() ?: "التعزيز"}"
                 }
               ],
-              "evaluation": "أسئلة تقويمية تقيس الأهداف المعرفية والمهارية والقيمية...",
-              "homework": "حل تدريبات الكتاب المدرسي ونشاط إثرائي مرتبط بالبيئة...",
-              "teacherNotes": "تم إنجاز أهداف الحصة في الزمن المحدد وتفاعل الطلاب إيجابياً."
+              "solvedExamples": "أمثلة نموذجية محلولة خطوة بخطوة متدرجة من البسيط إلى المتقدم...",
+              "classroomActivities": "نشاط فردي: ...\nنشاط جماعي: ...",
+              "formativeQuestions": "أسئلة سريعة أثناء الشرح للتأكد من الفهم...",
+              "individualDifferences": "للطلاب المبتدئين: تقديم أمثلة مبسطة ودعم مباشر.\nللطلاب المتقدمين: تكليفهم بمسائل إثرائية إضافية.",
+              "commonMisconceptions": "الخطأ المتوقع: ...\nالعلاج التربوي: ...",
+              "diagnosticAssessment": "سؤال قبلي في بداية الحصة للتحقق من الجاهزية...",
+              "formativeAssessment": "ملاحظة أداء الطلاب أثناء حل الأنشطة...",
+              "summativeAssessment": "أسئلة ختامية لقياس تحقق كافة الأهداف...",
+              "homework": "حل تمارين الكتاب المدرسي ص ... وتكليف تطبيقي...",
+              "summary": "خلاصة الدرس في نقاط مركزة...",
+              "modelAnswers": "الإجابات النموذجية للأنشطة والأسئلة التقويمية المطروحة...",
+              "teacherNotes": "تم إنجاز أهداف الحصة في الزمن المحدد وفق المنهج اليمني."
             }
         """.trimIndent()
 
@@ -224,6 +367,11 @@ class GeminiService {
                 period,
                 periodsCount,
                 duration,
+                unit,
+                term,
+                prepType,
+                studentLevel,
+                textbookRef,
                 selectedTeacherStyles,
                 selectedTeachingMethods,
                 selectedSkillsAndValues,
@@ -243,6 +391,11 @@ class GeminiService {
             period,
             periodsCount,
             duration,
+            unit,
+            term,
+            prepType,
+            studentLevel,
+            textbookRef,
             selectedTeacherStyles,
             selectedTeachingMethods,
             selectedSkillsAndValues,
@@ -263,6 +416,11 @@ class GeminiService {
         period: String,
         periodsCount: Int,
         duration: Int,
+        unit: String,
+        term: String,
+        prepType: String,
+        studentLevel: String,
+        textbookRef: String,
         styles: List<String>,
         methods: List<String>,
         skills: List<String>,
@@ -281,10 +439,23 @@ class GeminiService {
             val cog = obj.optString("cognitiveObjectives")
             val skl = obj.optString("skillObjectives")
             val aff = obj.optString("affectiveObjectives")
+            val outcomes = obj.optString("learningOutcomes", "1. استيعاب المفاهيم الأساسية للدرس.\n2. إتقان المهارات والتدريبات التطبيقية المرافقة.")
+            val prev = obj.optString("previousKnowledge", "مراجعة المتطلبات والمفاهيم السابقة المرتبطة بموضوع الدرس.")
             val intro = obj.optString("introduction5Min")
-            val eval = obj.optString("evaluation")
+            val aidsText = obj.optString("teachingMaterials", aids.joinToString("، "))
+            val concepts = obj.optString("keyConcepts", "المفاهيم والمصطلحات الأساسية لدرس ($title).")
+            val examples = obj.optString("solvedExamples", "أمثلة محلولة متدرجة في الصعوبة توضح طريقة التطبيق والحل النموذجي.")
+            val classActivities = obj.optString("classroomActivities", "أنشطة صفية تطبيقية: نشاط فردي لحل المسألة ونشاط جماعي للتعلم التعاوني.")
+            val formativeQ = obj.optString("formativeQuestions", "أسئلة شفوية أثناء الشرح للتحقق من الاستيعاب خطوة بخطوة.")
+            val diff = obj.optString("individualDifferences", "مراعاة الفروق الفردية: دعم وتدرج للمبتدئين، وأنشطة إثرائية ومسائل تفكير للمتقدمين.")
+            val misconcep = obj.optString("commonMisconceptions", "معالجة الأخطاء الشائعة المتوقعة وتوجيه الطلاب للحل الصحيح.")
+            val diag = obj.optString("diagnosticAssessment", "تقويم قبلي في مستهل الحصة لقياس التهيئة والخبرات السابقة.")
+            val formEval = obj.optString("formativeAssessment", "ملاحظة أداء الطلاب ومشاركتهم في الأنشطة.")
+            val sumEval = obj.optString("summativeAssessment", obj.optString("evaluation", "أسئلة تقويم ختامي تقيس نواتج التعلم."))
             val hw = obj.optString("homework")
-            val notes = obj.optString("teacherNotes")
+            val summaryText = obj.optString("summary", "ملخص ختامي يركز على النقاط الجوهرية للدرس.")
+            val modelAns = obj.optString("modelAnswers", "الإجابات النموذجية والحلول المفصلة للأنشطة والأسئلة التقويمية.")
+            val notes = obj.optString("teacherNotes", "تم إنجاز خطة الدرس بنجاح وتفاعل الطلاب بفاعلية.")
 
             val stepsList = mutableListOf<LessonPlanStep>()
             val stepsArr = obj.optJSONArray("steps")
@@ -318,20 +489,36 @@ class GeminiService {
                 date = date,
                 period = period,
                 periodsCount = periodsCount,
+                durationMinutes = duration,
+                unit = unit,
+                term = term,
+                prepType = prepType,
+                studentLevel = studentLevel,
+                textbookRef = textbookRef,
                 cognitiveObjectives = cog,
                 skillObjectives = skl,
                 affectiveObjectives = aff,
                 objectives = combinedObjectives,
+                learningOutcomes = outcomes,
+                previousKnowledge = prev,
                 introduction = intro,
-                previousKnowledge = "مراجعة المتطلبات السابقة ذات الصلة بدرس ($title) لمدة دقيقتين.",
+                teachingMaterials = aidsText,
+                keyConcepts = concepts,
                 explanation = stepsList.joinToString("\n\n") { "• ${it.stageAndTime}: ${it.teacherActions} (الوسيلة: ${it.materialsUsed})" },
                 teacherActivities = stepsList.joinToString("\n") { "• ${it.stageAndTime}: ${it.teacherActions}" },
                 studentActivities = stepsList.joinToString("\n") { "• ${it.stageAndTime}: ${it.studentActivities}" },
                 strategies = methods.joinToString("، "),
-                teachingMaterials = aids.joinToString("، "),
-                assessment = eval,
-                summary = "إبراز الخلاصات الأساسية لدرس $title وتثبيت المفاهيم المحورية.",
+                solvedExamples = examples,
+                classroomActivities = classActivities,
+                formativeQuestions = formativeQ,
+                individualDifferences = diff,
+                commonMisconceptions = misconcep,
+                diagnosticAssessment = diag,
+                assessment = formEval,
+                finalAssessment = sumEval,
                 homework = hw,
+                summary = summaryText,
+                modelAnswers = modelAns,
                 timeAllocation = "التهيئة: 5 د | الشرح: 20 د | التطبيق: 12 د | التقويم: 8 د",
                 teacherNotes = notes,
                 selectedTeacherStyles = styles,
@@ -355,6 +542,11 @@ class GeminiService {
         period: String,
         periodsCount: Int,
         duration: Int,
+        unit: String,
+        term: String,
+        prepType: String,
+        studentLevel: String,
+        textbookRef: String,
         styles: List<String>,
         methods: List<String>,
         skills: List<String>,
@@ -375,32 +567,43 @@ class GeminiService {
         val cog = if (customObjectives.isNotBlank()) customObjectives else """
             1. أن يحدد الطالب المفاهيم والمصطلحات الأساسية لدرس ($title) استناداً إلى المنهج اليمني بدقة.
             2. أن يفسر الطالب العلاقات والقوانين العلمية المرتبطة بموضوع الدرس بأسلوب سليم.
+            3. أن يستنتج الطالب التطبيقات الحياتية للدرس في بيئته اليومية.
         """.trimIndent()
 
         val skl = """
             1. أن يمارس الطالب مهارة ($primarySkill) في تحليل أمثلة وتطبيقات الدرس.
             2. أن يطبق مهارة ($secondarySkill) أثناء تنفيذ الأنشطة الصفية والتدريبات.
+            3. أن يشارك بفاعلية في حل التمارين الفردية والجماعية.
         """.trimIndent()
 
         val aff = """
             1. أن يستشعر الطالب أهمية موضوع ($title) في خدمة المجتمع والبيئة اليمنية.
             2. أن ينمي قيم التعاون والعمل الجماعي واحترام آراء الزملاء أثناء الحصة.
+            3. أن يقدر جهود العلماء ودور العلم في نهضة الوطن.
         """.trimIndent()
 
+        val outcomes = """
+            1. اكتساب المعرفة النظرية والمفاهيم المحورية لدرس ($title).
+            2. القدرة على حل المسائل والتدريبات المتدرجة بدقة واستقلالية.
+            3. تطبيق المهارات المكتسبة في مواقف تعليمية وحياتية جديدة.
+        """.trimIndent()
+
+        val prevKnowledge = "مراجعة الخبرات السابقة ذات الصلة بـ ($title) من خلال أسئلة سريعة مدتها 3 دقائق للربط بين المعارف السابقة والجديدة."
         val intro = "التهيئة والتمهيد (5 دقائق): بدء الحصة بتحية الطلاب، وتوظيف أسلوب ($primaryStyle) في طرح مسألة استهلالية مشوقة مرتبطة بالواقع اليمني تدور حول ($title)، واستثارة دافعية الطلاب عبر ($primaryAid)."
+        val concepts = "• المفهوم الرئيسي: التعريف المعتمد في المنهج اليمني لموضوع ($title).\n• المصطلحات الفرعية: القواعد والقوانين والشروط الحاكمة للمفهوم.\n• العلاقات البينية: أثر المتغيرات والتطبيقات الميدانية."
 
         val steps = listOf(
             LessonPlanStep(
                 stageAndTime = "التهيئة والتمهيد (5 د)",
                 teacherActions = "طرح تساؤل استهلالي مشوق يربط الدرس بالواقع وتوظيف أسلوب ($primaryStyle).",
-                studentActivities = "الاستماع والتفاعل ومناقشة السؤال التمهيدي.",
+                studentActivities = "الاستماع والتفاعل ومناقشة السؤال التمهيدي وتقديم إجابات أولية.",
                 materialsUsed = primaryAid,
                 teachingMethod = primaryStyle
             ),
             LessonPlanStep(
                 stageAndTime = "عرض المفهوم والشرح (18 د)",
-                teacherActions = "شرح محاور درس ($title) باستخدام أسلوب ($secondaryStyle) وربطها بالأمثلة التوضيحية.",
-                studentActivities = "متابعة الشرح وتدوين المفاهيم الأساسية والمشاركة في الحوار.",
+                teacherActions = "شرح محاور درس ($title) باستخدام أسلوب ($secondaryStyle) وربطها بالأمثلة التوضيحية المتدرجة.",
+                studentActivities = "متابعة الشرح وتدوين المفاهيم الأساسية والمشاركة في الحوار والمناقشة الصفية.",
                 materialsUsed = secondaryAid,
                 teachingMethod = secondaryStyle
             ),
@@ -414,19 +617,48 @@ class GeminiService {
             LessonPlanStep(
                 stageAndTime = "التقويم الختامي والغلق (8 د)",
                 teacherActions = "إجراء تقويم ختامي فوري لقياس تحقق الأهداف المعرفية والمهارية وتعزيز الإجابات الصحيحة.",
-                studentActivities = "الإجابة على الأسئلة الشفوية والتحريرية وتلخيص ما تم تعلمه.",
+                studentActivities = "الإجابة على الأسئلة الشفوية والتحريرية وتلخيص ما تم تعلمه في الدفتر.",
                 materialsUsed = primaryAid,
                 teachingMethod = styles.lastOrNull() ?: "التعزيز"
             )
         )
 
-        val eval = """
-            1. تقويم معرفي: ما المقصود بالمفاهيم الأساسية في درس ($title)؟
-            2. تقويم مهاري: طبق ما تعلمته في حل التدريب التطبيقي باستخدام ($primarySkill).
-            3. تقويم وجداني: كيف يوظف الطالب موضوع الدرس في حياته اليومية والمجتمع اليمني؟
+        val solvedEx = """
+            • مثال (1 - مستوى مباشر): تطبيق مباشر على المفهوم الأساسي يوضحه المعلم بالتفصيل على السبورة.
+            • مثال (2 - مستوى متوسط): مسألة تتضمن خطوتين في الحل مع إشراك الطلاب في خطوات التحليل.
+            • مثال (3 - مستوى متقدم): مسألة تتطلب ربط أكثر من مهارة واستنتاج الحل النموذجي.
         """.trimIndent()
 
-        val hw = "حل التدريبات المحددة لدرس ($title) في الكتاب المدرسي وكتابة تلخيص موجز من 3 أسطر."
+        val activities = """
+            • نشاط صفي فردي (5 د): حل التمرين رقم (1) في كراسة التدريبات للتأكد من الفهم المستقل.
+            • نشاط صفي تعاوني (8 د): عمل جماعي في مجموعات غير متجانسة لتبادل الأفكار وحل بطاقة التعلم.
+        """.trimIndent()
+
+        val formative = "1. ما الخطوة الأولى في التعامل مع مسألة من هذا النوع؟\n2. لماذا طبقنا هذه القاعدة دون غيرها؟\n3. كيف نتحقق من صحة الإجابة التي وصلنا إليها؟"
+
+        val diffInstruction = """
+            • الطلاب المبتدئون: تزويدهم ببطاقات تذكيرية بقواعد الدرس، وتقديم أمثلة محلولة إضافية مع دعم المعلم الفردي.
+            • الطلاب المتوسطون: تكليفهم بحل تدريبات الكتاب المدرسي مع توجيه إرشادي عام.
+            • الطلاب المتقدمون: تكليفهم بمسائل مفتوحة النهاية وتفسير حالات استثنائية لموضوع الدرس.
+        """.trimIndent()
+
+        val misconceptions = """
+            • الخطأ المتوقع: الخلط بين المفاهيم المتشابهة أو إهمال الترتيب الصحيح للخطوات.
+            • العلاج التربوي: عرض مثال مضاد يوضح أثر الخطأ، وإعادة صياغة القاعدة بخريطة مفاهيمية مبسطة.
+        """.trimIndent()
+
+        val diagnostic = "سؤال قبلي سريع في أول الحصة: اذكر ما تعرفه مسبقاً حول المفهوم المرتبط بدرس ($title)."
+        val formativeEval = "ملاحظة ومتابعة دقيقة لأداء الطلاب أثناء الأنشطة وتصويب الأخطاء فورياً."
+        val summative = "أسئلة تقويمية ختامية تقيس تحقق الأهداف المعرفية والمهارية والوجدانية كاملة."
+        val hw = "حل التدريبات المحددة لدرس ($title) في الكتاب المدرسي وكتابة تلخيص موجز من 3 أسطر في دفتر الواجبات."
+        val summary = "خلاصة مركزة لأهم القوانين والمفاهيم والنواتج المستفادة من الحصة."
+        val modelAnswers = "إجابات نموذجية تفصيلية لجميع الأسئلة والأنشطة والواجب المنزلي لتيسير المتابعة والتصحيح."
+
+        val combinedObjectives = listOf(
+            "الأهداف المعرفية:\n$cog",
+            "الأهداف المهارية:\n$skl",
+            "الأهداف الوجدانية والقيمية:\n$aff"
+        ).joinToString("\n\n")
 
         return LessonPlanResult(
             schoolName = schoolName,
@@ -437,22 +669,38 @@ class GeminiService {
             date = date,
             period = period,
             periodsCount = periodsCount,
+            durationMinutes = duration,
+            unit = unit,
+            term = term,
+            prepType = prepType,
+            studentLevel = studentLevel,
+            textbookRef = textbookRef.ifBlank { contentSource.ifBlank { "كتاب وزارة التربية والتعليم اليمني المعتمد" } },
             cognitiveObjectives = cog,
             skillObjectives = skl,
             affectiveObjectives = aff,
-            objectives = "الأهداف المعرفية:\n$cog\n\nالأهداف المهارية:\n$skl\n\nالأهداف الوجدانية:\n$aff",
+            objectives = combinedObjectives,
+            learningOutcomes = outcomes,
+            previousKnowledge = prevKnowledge,
             introduction = intro,
-            previousKnowledge = "مراجعة المتطلبات السابقة المرتبطة بدرس ($title) لمدة دقيقتين.",
+            teachingMaterials = aids.joinToString("، "),
+            keyConcepts = concepts,
             explanation = steps.joinToString("\n\n") { "• ${it.stageAndTime}: ${it.teacherActions} (الوسيلة: ${it.materialsUsed})" },
             teacherActivities = steps.joinToString("\n") { "• ${it.stageAndTime}: ${it.teacherActions}" },
             studentActivities = steps.joinToString("\n") { "• ${it.stageAndTime}: ${it.studentActivities}" },
             strategies = methods.joinToString("، "),
-            teachingMaterials = aids.joinToString("، "),
-            assessment = eval,
-            summary = "تلخيص المفاهيم المحورية وتثبيت المعارف الأساسية للدرس.",
+            solvedExamples = solvedEx,
+            classroomActivities = activities,
+            formativeQuestions = formative,
+            individualDifferences = diffInstruction,
+            commonMisconceptions = misconceptions,
+            diagnosticAssessment = diagnostic,
+            assessment = formativeEval,
+            finalAssessment = summative,
             homework = hw,
-            timeAllocation = "التهيئة: 5 د | الشرح: 18 د | التطبيق: 14 د | التقويم: 8 د",
-            teacherNotes = "تم تنفيذ الحصة وفق الخطة الزمنية المعتمدة وأظهر الطلاب تجاوباً فعالاً.",
+            summary = summary,
+            modelAnswers = modelAnswers,
+            timeAllocation = "التهيئة: 5 د | الشرح: 20 د | التطبيق: 12 د | التقويم: 8 د",
+            teacherNotes = "تم إنجاز أهداف الحصة في الزمن المحدد وتفاعل الطلاب إيجابياً وفق المنهج اليمني.",
             selectedTeacherStyles = styles,
             selectedTeachingMethods = methods,
             selectedSkillsAndValues = skills,
@@ -464,32 +712,51 @@ class GeminiService {
     /**
      * AI Exam Generator
      */
+    /**
+     * AI Exam Generator aligned with Yemeni Educational Standards
+     */
     suspend fun generateExam(
         subject: String,
         grade: String,
         topic: String,
-        difficulty: String,
-        questionCount: Int,
-        selectedTypes: List<QuestionType>
+        difficulty: String = "متوسط",
+        questionCount: Int = 10,
+        selectedTypes: List<QuestionType> = emptyList(),
+        examType: String = "اختبار شهري",
+        term: String = "الفصل الدراسي الأول",
+        unit: String = "",
+        totalMarks: Int = 20
     ): List<ExamQuestion> = withContext(Dispatchers.IO) {
-        val prompt = """
-            أنشئ اختباراً تعليمياً متقناً بالعربية بالمواصفات التالية:
-            - المادة: $subject
-            - الصف: $grade
-            - الموضوع: $topic
-            - مستوى الصعوبة: $difficulty
-            - عدد الأسئلة: $questionCount
-            - أنواع الأسئلة المطلوبة: ${selectedTypes.joinToString { it.titleAr }}
+        val typesStr = if (selectedTypes.isNotEmpty()) selectedTypes.joinToString { it.titleAr } else "اختيار من متعدد، صح أو خطأ، أكمل الفراغ، أسئلة مباشرة"
 
-            المطلوب صياغة الأسئلة بتنوع ودقة مع خيارات الإجابة والإجابة الصحيحة وشرح مبسط لكل سؤال.
-            أعد النتيجة بصيغة JSON حصراً بهذا النسق:
+        val prompt = """
+            أنت خبير إعداد الامتحانات المدرسية الرسمية في وزارة التربية والتعليم بالجمهورية اليمنية.
+            قم بإعداد اختبار مدرسي متقن ومعياري وفق المنهج اليمني بالمواصفات التالية:
+            - المادة: $subject
+            - الصف الدراسي: $grade
+            - الفصل الدراسي: $term
+            - الوحدة / الدروس: ${unit.ifBlank { topic }}
+            - عنوان / موضوع الاختبار: $topic
+            - نوع الاختبار: $examType
+            - مستوى الصعوبة: $difficulty
+            - عدد الأسئلة الإجمالي: $questionCount
+            - الدرجة الكلية: $totalMarks
+            - أنواع الأسئلة المطلوبة: $typesStr
+
+            [قواعد إعداد الاختبار]:
+            1. الالتزام الصارم بالمنهج اليمني لمستوى ($grade).
+            2. التنوع الشامل في أنواع الأسئلة وفق الأنواع المختارة.
+            3. لكل سؤال: حدد نص السؤال، نوع السؤال (type)، الخيارات إن وجدت (options)، الإجابة الصحيحة الدقيقة (correctAnswer)، وشرح مبسط لخطوات الحل (explanation)، والدرجة (marks).
+            4. تأكد من صحة الحقائق العلمية واللغوية 100%.
+
+            أعد النتيجة بصيغة JSON حصراً بهذا النسق البرمجي:
             [
               {
-                "questionText": "نص السؤال...",
-                "type": "MULTIPLE_CHOICE", // أو TRUE_FALSE أو FILL_BLANKS أو SHORT_ANSWER أو ESSAY
+                "questionText": "نص السؤال الواضح...",
+                "type": "MULTIPLE_CHOICE", // أو TRUE_FALSE, FILL_BLANKS, SHORT_ANSWER, ESSAY, GIVE_REASON, MENTION, COMPARE, REORDER, MATH_PROBLEM, APPLICATION_INFERENCE
                 "options": ["خيار 1", "خيار 2", "خيار 3", "خيار 4"],
-                "correctAnswer": "الإجابة الصحيحة",
-                "explanation": "شرح توضيحي للحل",
+                "correctAnswer": "الإجابة الصحيحة النموذجية",
+                "explanation": "شرح توضيحي للحل وكيفية التوصل للإجابة",
                 "marks": 2
               }
             ]
@@ -503,7 +770,7 @@ class GeminiService {
         }
 
         // Fallback generator
-        return@withContext generateFallbackExamQuestions(subject, grade, topic, questionCount, selectedTypes)
+        return@withContext generateFallbackExamQuestions(subject, grade, topic, questionCount, selectedTypes, totalMarks)
     }
 
     private fun parseExamQuestionsJson(raw: String): List<ExamQuestion> {
@@ -526,10 +793,18 @@ class GeminiService {
         grade: String,
         topic: String,
         count: Int,
-        types: List<QuestionType>
+        types: List<QuestionType>,
+        totalMarks: Int = 20
     ): List<ExamQuestion> {
         val list = mutableListOf<ExamQuestion>()
-        val effectiveTypes = if (types.isEmpty()) listOf(QuestionType.MULTIPLE_CHOICE, QuestionType.TRUE_FALSE) else types
+        val effectiveTypes = if (types.isEmpty()) listOf(
+            QuestionType.MULTIPLE_CHOICE,
+            QuestionType.TRUE_FALSE,
+            QuestionType.FILL_BLANKS,
+            QuestionType.SHORT_ANSWER
+        ) else types
+
+        val marksPerQ = (totalMarks / count.coerceAtLeast(1)).coerceAtLeast(1)
 
         for (i in 1..count) {
             val currentType = effectiveTypes[(i - 1) % effectiveTypes.size]
@@ -537,17 +812,17 @@ class GeminiService {
                 QuestionType.MULTIPLE_CHOICE -> {
                     list.add(
                         ExamQuestion(
-                            questionText = "ما هي النتيجة المنطقية لدراسة $topic في مقرر $subject؟",
+                            questionText = "ما هي النتيجة العلمية والتربوية المباشرة لدراسة $topic في مقرر $subject؟",
                             type = QuestionType.MULTIPLE_CHOICE,
                             options = listOf(
-                                "تحقيق الفهم العميق وتطبيق المهارات في الحياة العملية",
-                                "حفظ النصوص دون إدراك المفاهيم",
-                                "تجاهل القوانين والاعتماد على التخمين",
-                                "الاقتصار على الجانب النظري فقط"
+                                "تحقيق الفهم الدقيق وتطبيق المهارة في حل المشكلات الحياتية",
+                                "حفظ النصوص دون إدراك المفاهيم الأساسية",
+                                "تجاهل القواعد العلمية المعتمدة",
+                                "الاقتصار على التخمين والحفظ الآلي"
                             ),
-                            correctAnswer = "تحقيق الفهم العميق وتطبيق المهارات في الحياة العملية",
-                            explanation = "الهدف الأساسي من التعلم هو التطبيق العملي ونقل أثر التعلم.",
-                            marks = 3
+                            correctAnswer = "تحقيق الفهم الدقيق وتطبيق المهارة في حل المشكلات الحياتية",
+                            explanation = "الهدف الجوهري من المنهج اليمني هو التطبيق العملي ونقل أثر التعلم للمواقف الحياتية.",
+                            marks = marksPerQ
                         )
                     )
                 }
@@ -556,55 +831,140 @@ class GeminiService {
                     list.add(
                         ExamQuestion(
                             questionText = if (isTrue)
-                                "تعتبر المبادئ الأساسية لـ ($topic) معتمدة على التجربة والبرهان العلمي الدقيق."
+                                "تستند المفاهيم الأساسية لدرس ($topic) إلى قواعد منهجية وبرهان علمي معتمد في المنهج اليمني."
                             else
-                                "يمكن إهمال الفروق الفردية والشروط الأولية عند تطبيق قواعد ($topic).",
+                                "يمكن تطبيق قواعد ($topic) بصورة عشوائية دون مراعاة الشروط والمعطيات الأولية.",
                             type = QuestionType.TRUE_FALSE,
                             options = listOf("صح", "خطأ"),
                             correctAnswer = if (isTrue) "صح" else "خطأ",
-                            explanation = if (isTrue) "صحيح، لأن المفاهيم تبنى على أسس منهجية متينة." else "خطأ، لأن الفروق والشروط أساسية في صحة التطبيق.",
-                            marks = 2
+                            explanation = if (isTrue) "صحيح، لأن المنهج يبنى على أدلة وقوانين علمية متسقة." else "خطأ، لأن التطبيق السليم يتطلب استيفاء الشروط والمعطيات بدقة.",
+                            marks = marksPerQ
                         )
                     )
                 }
                 QuestionType.FILL_BLANKS -> {
                     list.add(
                         ExamQuestion(
-                            questionText = "يُقاس الأثر التعليمي لـ ($topic) من خلال قدرة المتعلم على حل ______ ومواجهة المشكلات.",
+                            questionText = "يُقاس تحصيل الطالب في موضوع ($topic) بقدرته على حل ______ وتفسير النتائج بدقة.",
                             type = QuestionType.FILL_BLANKS,
                             options = emptyList(),
-                            correctAnswer = "المسائل التطبيقية",
-                            explanation = "القدرة على حل المسائل هي المعيار الأبرز لقياس التحصيل.",
-                            marks = 2
+                            correctAnswer = "المسائل والأنشطة التطبيقية",
+                            explanation = "حل المسائل التطبيقية يبرهن على استيعاب المفهوم وإتقان المهارة.",
+                            marks = marksPerQ
+                        )
+                    )
+                }
+                QuestionType.GIVE_REASON -> {
+                    list.add(
+                        ExamQuestion(
+                            questionText = "علّل: أهمية التحقق من صحة الخطوات عند دراسة ($topic).",
+                            type = QuestionType.GIVE_REASON,
+                            options = emptyList(),
+                            correctAnswer = "لضمان دقة النتائج، وتجنب الأخطاء الشائعة، وترسيخ الفهم المنهجي السليم.",
+                            explanation = "التحقق يمثل مهارة تفكير عليا تؤكد اتساق العمليات والنتائج.",
+                            marks = marksPerQ
+                        )
+                    )
+                }
+                QuestionType.MENTION -> {
+                    list.add(
+                        ExamQuestion(
+                            questionText = "اذكر ثلاث نقاط أساسية تميز موضوع ($topic) في مقرر $subject.",
+                            type = QuestionType.MENTION,
+                            options = emptyList(),
+                            correctAnswer = "1. الوضوح المفهومي 2. الترابط المنطقي للخطوات 3. التطبيق العملي في البيئة اليمنية.",
+                            explanation = "هذه النقاط تمثل الركائز الأساسية التي يركز عليها المنهج.",
+                            marks = marksPerQ
+                        )
+                    )
+                }
+                QuestionType.COMPARE -> {
+                    list.add(
+                        ExamQuestion(
+                            questionText = "قارن باختصار بين المعطيات والنتائج في سياق درس ($topic).",
+                            type = QuestionType.COMPARE,
+                            options = emptyList(),
+                            correctAnswer = "المعطيات: الحقائق والشروط المبدئية المعطاة. النتائج: ما يتم التوصل إليه بتطبيق القواعد المنهجية.",
+                            explanation = "المقارنة توضح العلاقة السببية بين المدخلات والمخرجات في المادة.",
+                            marks = marksPerQ
+                        )
+                    )
+                }
+                QuestionType.REORDER -> {
+                    list.add(
+                        ExamQuestion(
+                            questionText = "رتّب الخطوات التالية لحل أي مسألة أو نشاط في درس ($topic):\n( ) استخراج المعطيات\n( ) تطبيق القانون أو القاعدة\n( ) التحقق من الناتج\n( ) تحديد المطلوب بدقة",
+                            type = QuestionType.REORDER,
+                            options = emptyList(),
+                            correctAnswer = "1. استخراج المعطيات -> 2. تحديد المطلوب -> 3. تطبيق القاعدة -> 4. التحقق من الناتج.",
+                            explanation = "هذا هو التسلسل المنطقي المنهجي لحل المشكلات التعليمية.",
+                            marks = marksPerQ
+                        )
+                    )
+                }
+                QuestionType.MATH_PROBLEM -> {
+                    list.add(
+                        ExamQuestion(
+                            questionText = "مسألة تطبيقية: إذا كانت القيمة الأولى في ($topic) تساوي ${i * 12} والقيمة الثانية تساوي ${i * 4}، فاحسب الناتج النهائي للعملية المقررة.",
+                            type = QuestionType.MATH_PROBLEM,
+                            options = emptyList(),
+                            correctAnswer = "${i * 16}",
+                            explanation = "الناتج = ${i * 12} + ${i * 4} = ${i * 16} مع توضيح خطوات الحل.",
+                            marks = marksPerQ
+                        )
+                    )
+                }
+                QuestionType.APPLICATION_INFERENCE -> {
+                    list.add(
+                        ExamQuestion(
+                            questionText = "استنتج أثر غياب أحد الشروط الأساسية في درس ($topic) على النتيجة النهائية.",
+                            type = QuestionType.APPLICATION_INFERENCE,
+                            options = emptyList(),
+                            correctAnswer = "يؤدي إلى اختلال النتيجة وتناقض الخطوات، لأن القاعدة كل متكامل.",
+                            explanation = "الاستنتاج يؤكد فهم الشروط الضرورية والكافية لصحة القاعدة.",
+                            marks = marksPerQ
+                        )
+                    )
+                }
+                QuestionType.DIAGRAM_TABLE -> {
+                    list.add(
+                        ExamQuestion(
+                            questionText = "بناءً على المخطط التوضيحي أو الجدول المقابل لدرس ($topic)، حدد العنصر المفقود ودلالته.",
+                            type = QuestionType.DIAGRAM_TABLE,
+                            options = listOf("العنصر الأساسي الأول", "المتغير التابع", "الثابت المنهجي", "النتيجة النهائية"),
+                            correctAnswer = "العنصر الأساسي الأول",
+                            explanation = "قراءة المخطط تبدأ بتحديد العنصر الأساسي الذي تنطلق منه بقية العلاقات.",
+                            marks = marksPerQ
                         )
                     )
                 }
                 QuestionType.SHORT_ANSWER -> {
                     list.add(
                         ExamQuestion(
-                            questionText = "اذكر شرطين رئيسيين لضمان نجاح تطبيق مفاهيم ($topic) في الصف المدرسي.",
+                            questionText = "أجب بإيجاز: ما هو المبدأ العام الذي يحكم درس ($topic) في مقرر $subject؟",
                             type = QuestionType.SHORT_ANSWER,
                             options = emptyList(),
-                            correctAnswer = "1. وضوح الهدف التعليمي 2. الممارسة والتدريب المستمر",
-                            explanation = "وضوح الهدف والممارسة يعززان استبقاء المهارة لدى الطالب.",
-                            marks = 3
+                            correctAnswer = "المبدأ هو تطبيق القواعد المعتمدة في المنهج اليمني مع مراعاة الدقة والخطوات المنطقية.",
+                            explanation = "إجابة مركزة ومباشرة تقيس الفهم الجوهري.",
+                            marks = marksPerQ
                         )
                     )
                 }
                 QuestionType.ESSAY -> {
                     list.add(
                         ExamQuestion(
-                            questionText = "اكتب فقرة علمية متكاملة تشرح فيها أهمية ($topic) وتأثيره الإيجابي على تطور المجتمع.",
+                            questionText = "اكتب فقرة تعليمية متكاملة تشرح فيها أهمية ($topic) وتطبيقاته في خدمة المجتمع والبيئة اليمنية.",
                             type = QuestionType.ESSAY,
                             options = emptyList(),
-                            correctAnswer = "شرح مفصل يتضمن مقدمة وتحليلاً للأثر الميداني وخاتمة توصيات.",
-                            explanation = "يقيس السؤال مهارات التفكير العليا والتحليل والتركيب لدى المتعلم.",
-                            marks = 5
+                            correctAnswer = "توضيح شامل يربط بين المفهوم العلمي وتطبيقاته الميدانية وفوائده التنموية لليمن.",
+                            explanation = "السؤال المقالي يقيس مهارات التعبير والتحليل والتوليف لدى الطالب.",
+                            marks = marksPerQ + 1
                         )
                     )
                 }
             }
         }
+
         return list
     }
 
@@ -981,24 +1341,53 @@ data class LessonPlanResult(
     val date: String = "",
     val period: String = "",
     val periodsCount: Int = 1,
+    val durationMinutes: Int = 45,
+    val unit: String = "",
+    val term: String = "الفصل الدراسي الأول",
+    val prepType: String = "تحضير يومي",
+    val studentLevel: String = "متوسط (عام)",
+    val textbookRef: String = "",
     // Objectives
     val cognitiveObjectives: String = "",
     val skillObjectives: String = "",
     val affectiveObjectives: String = "",
     val objectives: String = "",
-    // 5-minute Intro
-    val introduction: String = "",
+    val learningOutcomes: String = "",
+    // Prerequisites & Warmup
     val previousKnowledge: String = "",
+    val introduction: String = "",
+    // Aids & Key Concepts
+    val teachingMaterials: String = "",
+    val keyConcepts: String = "",
+    // Explanation & Roles
     val explanation: String = "",
     val teacherActivities: String = "",
     val studentActivities: String = "",
     val strategies: String = "",
-    val teachingMaterials: String = "",
+    // Activities & Differentiated Instruction
+    val solvedExamples: String = "",
+    val classroomActivities: String = "",
+    val formativeQuestions: String = "",
+    val individualDifferences: String = "",
+    val commonMisconceptions: String = "",
+    // Assessments & Summary
+    val diagnosticAssessment: String = "",
     val assessment: String = "",
-    val summary: String = "",
+    val finalAssessment: String = "",
     val homework: String = "",
+    val summary: String = "",
+    val modelAnswers: String = "",
     val timeAllocation: String = "",
     val teacherNotes: String = "",
+    // Extended Yemeni 18-part structure aliases
+    val generalObjectives: String = objectives,
+    val prerequisites: String = previousKnowledge,
+    val teacherAndStudentRole: String = "",
+    val questionsDuringExplanation: String = formativeQuestions,
+    val expectedErrorsAndRemediation: String = commonMisconceptions,
+    val assessmentPreFormativeSummative: String = "",
+    val lessonSummary: String = summary,
+    val timeDistribution: String = timeAllocation,
     // Selected options
     val selectedTeacherStyles: List<String> = emptyList(),
     val selectedTeachingMethods: List<String> = emptyList(),

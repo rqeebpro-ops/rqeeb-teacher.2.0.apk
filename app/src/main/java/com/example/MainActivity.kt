@@ -46,6 +46,7 @@ class MainActivity : ComponentActivity() {
             termPlanDao = database.termPlanDao(),
             appSettingDao = database.appSettingDao()
         )
+        geminiService.setRepository(repository)
 
         setContent {
             var currentAppState by remember { mutableStateOf<AppState>(AppState.Auth) }

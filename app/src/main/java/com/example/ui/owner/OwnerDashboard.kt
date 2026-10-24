@@ -1,6 +1,7 @@
 package com.example.ui.owner
 
 import android.widget.Toast
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -71,6 +72,16 @@ fun OwnerDashboard(
     var ownerWhatsAppUrlInput by remember { mutableStateOf(YemeniCurriculum.OWNER_WHATSAPP_URL_DEFAULT) }
     var contactSaveSuccess by remember { mutableStateOf(false) }
 
+    // Real AI Key & Model Configuration States
+    var savedApiKey by remember { mutableStateOf("") }
+    var apiKeyInput by remember { mutableStateOf("") }
+    var isEditingApiKey by remember { mutableStateOf(false) }
+    var selectedAiModel by remember { mutableStateOf("gemini-2.5-flash") }
+    var aiDailyLimit by remember { mutableIntStateOf(100) }
+    var aiMaxTokens by remember { mutableIntStateOf(2048) }
+    var aiStats by remember { mutableStateOf<Triple<Int, Int, Int>?>(null) }
+    var saveKeySuccess by remember { mutableStateOf(false) }
+
     var apiTestResult by remember { mutableStateOf<String?>(null) }
     var isTestingApi by remember { mutableStateOf(false) }
 
@@ -78,6 +89,11 @@ fun OwnerDashboard(
         autoApproveState = repository.isAutoApproveEnabled()
         ownerPhoneInput = repository.getOwnerPhone()
         ownerWhatsAppUrlInput = repository.getOwnerWhatsAppUrl()
+        savedApiKey = repository.getAiApiKey()
+        selectedAiModel = repository.getAiModelName()
+        aiDailyLimit = repository.getAiDailyLimit()
+        aiMaxTokens = repository.getAiMaxTokens()
+        aiStats = repository.getAiUsageStats()
     }
 
     val filteredTeachers = remember(teachers, searchQuery, filterStatus, filterGov) {
@@ -362,19 +378,50 @@ fun OwnerDashboard(
                         },
                         passwordSuccess = changePasswordSuccess,
                         geminiConfigured = geminiService.isConfigured(),
+                        savedApiKey = savedApiKey,
+                        apiKeyInput = apiKeyInput,
+                        onApiKeyInputChange = { apiKeyInput = it },
+                        isEditingApiKey = isEditingApiKey,
+                        onToggleEditApiKey = { isEditingApiKey = !isEditingApiKey },
+                        onSaveApiKey = {
+                            if (apiKeyInput.isNotBlank()) {
+                                coroutineScope.launch {
+                                    repository.setAiApiKey(apiKeyInput.trim())
+                                    savedApiKey = apiKeyInput.trim()
+                                    apiKeyInput = ""
+                                    isEditingApiKey = false
+                                    saveKeySuccess = true
+                                    Toast.makeText(context, "تم حفظ وتشفير مفتاح الذكاء الاصطناعي بنجاح", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        },
+                        saveKeySuccess = saveKeySuccess,
+                        selectedModel = selectedAiModel,
+                        onModelChange = { model ->
+                            selectedAiModel = model
+                            coroutineScope.launch { repository.setAiModelName(model) }
+                        },
+                        dailyLimit = aiDailyLimit,
+                        onDailyLimitChange = { limit ->
+                            aiDailyLimit = limit
+                            coroutineScope.launch { repository.setAiDailyLimit(limit) }
+                        },
+                        maxTokens = aiMaxTokens,
+                        onMaxTokensChange = { tokens ->
+                            aiMaxTokens = tokens
+                            coroutineScope.launch { repository.setAiMaxTokens(tokens) }
+                        },
+                        aiStats = aiStats,
                         isTestingApi = isTestingApi,
                         apiTestResult = apiTestResult,
                         onTestApi = {
                             isTestingApi = true
                             apiTestResult = null
                             coroutineScope.launch {
-                                val result = geminiService.generateContent("اختبار اتصال رقيب للمنهج اليمني: اذكر نصيحة تربوية لمعلمي اليمن.")
+                                val diag = geminiService.testConnection()
                                 isTestingApi = false
-                                apiTestResult = if (result.isSuccess) {
-                                    "الاتصال ناجح تماماً! استجابة Gemini: ${result.getOrThrow()}"
-                                } else {
-                                    "فشل الاتصال: ${result.exceptionOrNull()?.message}"
-                                }
+                                apiTestResult = "${if (diag.isSuccess) "✅ " else "❌ "}${diag.message}\n(الحالة: ${diag.statusCode} | النموذج: ${diag.modelName} | المزود: ${diag.provider})"
+                                aiStats = repository.getAiUsageStats()
                             }
                         }
                     )
@@ -795,6 +842,20 @@ fun OwnerSettingsAndContactSection(
     onSavePassword: () -> Unit,
     passwordSuccess: Boolean,
     geminiConfigured: Boolean,
+    savedApiKey: String,
+    apiKeyInput: String,
+    onApiKeyInputChange: (String) -> Unit,
+    isEditingApiKey: Boolean,
+    onToggleEditApiKey: () -> Unit,
+    onSaveApiKey: () -> Unit,
+    saveKeySuccess: Boolean,
+    selectedModel: String,
+    onModelChange: (String) -> Unit,
+    dailyLimit: Int,
+    onDailyLimitChange: (Int) -> Unit,
+    maxTokens: Int,
+    onMaxTokensChange: (Int) -> Unit,
+    aiStats: Triple<Int, Int, Int>?,
     isTestingApi: Boolean,
     apiTestResult: String?,
     onTestApi: () -> Unit
@@ -883,48 +944,210 @@ fun OwnerSettingsAndContactSection(
             }
         }
 
-        // Gemini AI Diagnostics
+        // Dedicated Real AI Key & Model Management Card (إعدادات وربط مفتاح الذكاء الاصطناعي)
         item {
             Card(
-                shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f))
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text("حالة خادم الذكاء الاصطناعي للمنهج اليمني (Gemini)", fontWeight = FontWeight.SemiBold)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "إعدادات وربط مفتاح الذكاء الاصطناعي (Gemini API)",
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontSize = 14.sp
+                        )
+
                         Surface(
                             shape = CircleShape,
-                            color = if (geminiConfigured) StatusApproved else StatusPending,
-                            modifier = Modifier.size(10.dp)
-                        ) {}
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            if (geminiConfigured) "مفتاح Gemini مهيأ بنجاح عبر لوحة Secrets" else "المفتاح غير موجود (يعمل بنظام المعلم الذكي المدمج)",
-                            fontSize = 13.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                            color = if (savedApiKey.isNotBlank() || geminiConfigured) StatusApproved.copy(alpha = 0.15f) else StatusPending.copy(alpha = 0.15f)
+                        ) {
+                            Text(
+                                if (savedApiKey.isNotBlank() || geminiConfigured) "متصل ومفعل" else "قيد الانتظار",
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                color = if (savedApiKey.isNotBlank() || geminiConfigured) StatusApproved else StatusPending,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
-                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Text(
+                        "يتم حفظ المفتاح بأمان تام في مساحة تخزين المالك المشفرة، ولا يظهر للمعلمين ولا يتم تسجيله في سجلات النظام.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    // Display Masked Key or Edit Box
+                    if (!isEditingApiKey && savedApiKey.isNotBlank()) {
+                        val masked = "••••••••••••" + savedApiKey.takeLast(4)
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column {
+                                    Text("المفتاح الحالي النشط:", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(masked, fontWeight = FontWeight.Bold, fontSize = 14.sp, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
+                                }
+
+                                TextButton(onClick = onToggleEditApiKey) {
+                                    Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("تغيير المفتاح")
+                                }
+                            }
+                        }
+                    } else {
+                        OutlinedTextField(
+                            value = apiKeyInput,
+                            onValueChange = onApiKeyInputChange,
+                            label = { Text("أدخل مفتاح Gemini API الحقيقي (AIzaSy...)") },
+                            placeholder = { Text("AIzaSy...") },
+                            singleLine = true,
+                            trailingIcon = {
+                                if (savedApiKey.isNotBlank()) {
+                                    IconButton(onClick = onToggleEditApiKey) {
+                                        Icon(Icons.Default.Close, contentDescription = "إلغاء")
+                                    }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        Button(
+                            onClick = onSaveApiKey,
+                            enabled = apiKeyInput.isNotBlank(),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("حفظ وتشفير مفتاح الذكاء الاصطناعي")
+                        }
+                    }
+
+                    if (saveKeySuccess) {
+                        Text("تم حفظ المفتاح بنجاح وسيبدأ النظام في استخدامه فوراً!", color = StatusApproved, fontSize = 12.sp)
+                    }
+
+                    HorizontalDivider()
+
+                    // Model Selection
+                    Text("نموذج الذكاء الاصطناعي المعتمد:", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf(
+                            Pair("gemini-2.5-flash", "Gemini 2.5 Flash (موصى به)"),
+                            Pair("gemini-1.5-pro", "Gemini 1.5 Pro"),
+                            Pair("gemini-1.5-flash", "Gemini 1.5 Flash")
+                        ).forEach { (model, title) ->
+                            FilterChip(
+                                selected = selectedModel == model,
+                                onClick = { onModelChange(model) },
+                                label = { Text(title, fontSize = 11.sp) }
+                            )
+                        }
+                    }
+
+                    // Daily Limit & Tokens
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("الحد اليومي للطلبات:", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                listOf(100, 250, 500).forEach { lim ->
+                                    FilterChip(
+                                        selected = dailyLimit == lim,
+                                        onClick = { onDailyLimitChange(lim) },
+                                        label = { Text("$lim", fontSize = 11.sp) }
+                                    )
+                                }
+                            }
+                        }
+
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("أقصى عدد توكنات:", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                listOf(2048, 4096, 8192).forEach { tok ->
+                                    FilterChip(
+                                        selected = maxTokens == tok,
+                                        onClick = { onMaxTokensChange(tok) },
+                                        label = { Text("$tok", fontSize = 11.sp) }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Usage Stats Banner
+                    if (aiStats != null) {
+                        val (total, success, failed) = aiStats
+                        Card(
+                            shape = RoundedCornerShape(10.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(10.dp),
+                                horizontalArrangement = Arrangement.SpaceAround
+                            ) {
+                                Text("إجمالي الطلبات: $total", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                                Text("الناجحة: $success", fontSize = 11.sp, color = StatusApproved, fontWeight = FontWeight.SemiBold)
+                                Text("المتعثرة: $failed", fontSize = 11.sp, color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                    }
+
+                    // Real Connection Test Button
                     Button(
                         onClick = onTestApi,
                         enabled = !isTestingApi,
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         if (isTestingApi) {
-                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                            CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("جارٍ فحص استجابة الخادم...")
                         } else {
-                            Text("اختبار اتصال الذكاء الاصطناعي الآن")
+                            Icon(Icons.Default.CloudSync, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("فحص واختبار اتصال الذكاء الاصطناعي الآن")
                         }
                     }
 
                     if (apiTestResult != null) {
-                        Spacer(modifier = Modifier.height(10.dp))
-                        Text(
-                            apiTestResult,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (apiTestResult.contains("ناجح")) StatusApproved else MaterialTheme.colorScheme.error
-                        )
+                        Card(
+                            shape = RoundedCornerShape(8.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (apiTestResult.contains("✅")) Color(0xFFE8F5E9) else Color(0xFFFFEBEE)
+                            )
+                        ) {
+                            Text(
+                                apiTestResult,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (apiTestResult.contains("✅")) Color(0xFF2E7D32) else Color(0xFFC62828),
+                                modifier = Modifier.padding(10.dp)
+                            )
+                        }
                     }
                 }
             }

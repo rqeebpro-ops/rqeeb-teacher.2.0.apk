@@ -74,6 +74,7 @@ fun ExamGeneratorScreen(
     var title by remember { mutableStateOf("") }
     var subject by remember { mutableStateOf(teacher.subject) }
     var grade by remember { mutableStateOf(teacher.stage) }
+    var examType by remember { mutableStateOf(YemeniCurriculum.EXAM_TYPES[1]) }
     var difficulty by remember { mutableStateOf("متوسط") }
     var questionCount by remember { mutableIntStateOf(5) }
     var durationMinutes by remember { mutableIntStateOf(45) }
@@ -267,6 +268,23 @@ fun ExamGeneratorScreen(
                                     )
                                 }
 
+                                // Exam Type Filter
+                                Text("نوع الاختبار (المنهج اليمني):", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    YemeniCurriculum.EXAM_TYPES.forEach { t ->
+                                        FilterChip(
+                                            selected = examType == t,
+                                            onClick = { examType = t },
+                                            label = { Text(t, fontSize = 11.sp) }
+                                        )
+                                    }
+                                }
+
                                 // Difficulty & Count
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
@@ -333,7 +351,8 @@ fun ExamGeneratorScreen(
                                                 topic = title,
                                                 difficulty = difficulty,
                                                 questionCount = questionCount,
-                                                selectedTypes = selectedTypes.toList()
+                                                selectedTypes = selectedTypes.toList(),
+                                                examType = examType
                                             )
                                             questionsList.clear()
                                             questionsList.addAll(generated)
@@ -617,7 +636,7 @@ fun ExamGeneratorScreen(
                                                 difficulty = seedDifficulty,
                                                 strategy = seedStrategy,
                                                 count = requestedVariantCount,
-                                                onProgress = { current, total ->
+                                                onProgress = { current: Int, total: Int ->
                                                     variantProgress = Pair(current, total)
                                                 }
                                             )

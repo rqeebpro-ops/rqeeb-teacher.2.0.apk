@@ -150,4 +150,78 @@ class RqeebLogicTest {
             assertTrue(strategy.descriptionAr.isNotBlank())
         }
     }
+
+    @Test
+    fun testPrimaryMathEngineAdditionWithRegrouping() {
+        val steps = com.example.data.math.PrimaryMathEngine.solveAdditionWithCarries(468, 375)
+        assertEquals(843, 468 + 375)
+        assertTrue("Addition steps should not be empty", steps.isNotEmpty())
+
+        // Ones column: 8 + 5 = 13 -> carry 1
+        assertEquals(0, steps[0].columnIndex)
+        assertEquals(1, steps[0].carryOut)
+        assertEquals(3, steps[0].digitResult)
+
+        // Tens column: 6 + 7 + 1 = 14 -> carry 1
+        assertEquals(1, steps[1].columnIndex)
+        assertEquals(1, steps[1].carryOut)
+        assertEquals(4, steps[1].digitResult)
+
+        // Hundreds column: 4 + 3 + 1 = 8 -> carry 0
+        assertEquals(2, steps[2].columnIndex)
+        assertEquals(0, steps[2].carryOut)
+        assertEquals(8, steps[2].digitResult)
+    }
+
+    @Test
+    fun testPrimaryMathEngineSubtractionBorrowingAcrossZeros() {
+        val result504 = com.example.data.math.PrimaryMathEngine.solveSubtractionWithBorrowing(504, 238)
+        assertEquals(266, result504.difference)
+        assertEquals(504, result504.minuend)
+        assertEquals(238, result504.subtrahend)
+
+        // The ones column (4 - 8) needs a borrow
+        val onesStep = result504.steps.first { it.columnIndex == 0 }
+        assertTrue(onesStep.borrowNeeded)
+        assertEquals(6, onesStep.digitResult) // 14 - 8 = 6
+
+        // Tracing should show intermediate zero converting to 9
+        val traceString = onesStep.borrowStepsTrace.joinToString(" ")
+        assertTrue("Borrow trace must mention converting 0 to 9", traceString.contains("9") || traceString.contains("الصفر"))
+
+        // Subtraction from 600 - 247
+        val result600 = com.example.data.math.PrimaryMathEngine.solveSubtractionWithBorrowing(600, 247)
+        assertEquals(353, result600.difference)
+        val ones600 = result600.steps.first { it.columnIndex == 0 }
+        assertTrue(ones600.borrowNeeded)
+        assertEquals(3, ones600.digitResult) // 10 - 7 = 3
+    }
+
+    @Test
+    fun testPrimaryMathEngineGeneratesExamQuestions() {
+        val exam = com.example.data.math.PrimaryMathEngine.generatePrimaryMathExam(
+            grade = 4,
+            count = 5,
+            skills = listOf("SUBTRACTION_ZEROS", "ADDITION_REGROUPING", "MULTIPLICATION"),
+            difficulty = "متوسط"
+        )
+        assertEquals(5, exam.size)
+        for (q in exam) {
+            assertTrue(q.questionText.isNotBlank())
+            assertTrue(q.correctAnswer.isNotBlank())
+            assertTrue("Options should contain correct answer", q.options.contains(q.correctAnswer))
+            assertTrue(q.explanation.isNotBlank())
+            assertEquals(com.example.data.model.QuestionType.MULTIPLE_CHOICE, q.type)
+        }
+    }
+
+    @Test
+    fun testYemeniCurriculumUnitsMapping() {
+        val mathUnitsG4 = com.example.data.model.YemeniCurriculum.getCurriculumUnits("الصف الرابع الابتدائي", "الرياضيات")
+        assertTrue(mathUnitsG4.isNotEmpty())
+        assertTrue(mathUnitsG4.any { it.key.contains("الجمع") || it.key.contains("الأعداد") })
+
+        val scienceUnitsG8 = com.example.data.model.YemeniCurriculum.getCurriculumUnits("الصف الثاني الإعدادي (الثامن)", "العلوم")
+        assertTrue(scienceUnitsG8.isNotEmpty())
+    }
 }
