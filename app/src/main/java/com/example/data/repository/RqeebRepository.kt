@@ -13,10 +13,17 @@ class RqeebRepository(
     private val timetableDao: TimetableDao,
     private val homeworkDao: HomeworkDao,
     private val termPlanDao: TermPlanDao,
-    private val appSettingDao: AppSettingDao
+    private val appSettingDao: AppSettingDao,
+    private var cloudSyncService: com.example.data.cloud.CloudSyncService? = null
 ) {
-    // Teachers
-    val allTeachers: Flow<List<TeacherEntity>> = teacherDao.getAllTeachers()
+    fun setCloudSyncService(service: com.example.data.cloud.CloudSyncService) {
+        this.cloudSyncService = service
+    }
+
+    // Teachers: Cloud-First with Local Room Persistence
+    val allTeachers: Flow<List<TeacherEntity>>
+        get() = cloudSyncService?.getAllTeachersFlow() ?: teacherDao.getAllTeachers()
+
     val totalTeachersCount: Flow<Int> = teacherDao.getTotalTeachersCount()
     val totalLessonsCount: Flow<Int> = lessonDao.getTotalLessonsCount()
     val totalExamsCount: Flow<Int> = examDao.getTotalExamsCount()
@@ -25,25 +32,189 @@ class RqeebRepository(
 
     suspend fun getTeacherById(id: Long): TeacherEntity? = teacherDao.getTeacherById(id)
 
-    suspend fun getTeacherByLogin(identifier: String): TeacherEntity? =
-        teacherDao.getTeacherByEmailOrPhone(identifier.trim())
+    suspend fun getTeacherByLogin(identifier: String): TeacherEntity? {
+        val clean = identifier.trim()
+        // Query cloud first for real-time status
+        val cloudTeacher = cloudSyncService?.fetchTeacherStatus(clean)
+        if (cloudTeacher != null) {
+            val local = teacherDao.getTeacherByEmailOrPhone(clean)
+            if (local != null) {
+                val merged = cloudTeacher.copy(id = local.id)
+                teacherDao.updateTeacher(merged)
+                return merged
+            } else {
+                val newId = teacherDao.insertTeacher(cloudTeacher)
+                return cloudTeacher.copy(id = newId)
+            }
+        }
+        return teacherDao.getTeacherByEmailOrPhone(clean)
+    }
 
     suspend fun registerTeacher(teacher: TeacherEntity): Pair<Boolean, String> {
-        val existing = teacherDao.getTeacherByEmailOrPhone(teacher.email.trim())
-            ?: teacherDao.getTeacherByEmailOrPhone(teacher.phone.trim())
-        if (existing != null) {
-            return Pair(false, "البريد الإلكتروني أو رقم الهاتف مسجل مسبقاً")
+        val cleanEmail = teacher.email.trim()
+        val cleanPhone = teacher.phone.trim()
+
+        // Check local duplicate
+        val existingLocal = teacherDao.getTeacherByEmailOrPhone(cleanEmail)
+            ?: teacherDao.getTeacherByEmailOrPhone(cleanPhone)
+        if (existingLocal != null) {
+            return Pair(false, "البريد الإلكتروني أو رقم الهاتف مسجل مسبقاً في النظام")
         }
+
+        // Check cloud duplicate
+        val existingCloud = cloudSyncService?.fetchTeacherStatus(cleanEmail)
+            ?: cloudSyncService?.fetchTeacherStatus(cleanPhone)
+        if (existingCloud != null) {
+            teacherDao.insertTeacher(existingCloud)
+            return Pair(false, "البريد الإلكتروني أو رقم الهاتف مسجل مسبقاً على الخادم المركزي")
+        }
+
         val autoApprove = appSettingDao.getValue("auto_approve") == "true"
         val status = if (autoApprove) TeacherEntity.STATUS_APPROVED else TeacherEntity.STATUS_PENDING
-        val teacherWithStatus = teacher.copy(status = status)
-        teacherDao.insertTeacher(teacherWithStatus)
+        val isAct = autoApprove
+        val teacherToSave = teacher.copy(status = status, isActivated = isAct)
+
+        // 1. Save locally in Room
+        val localId = teacherDao.insertTeacher(teacherToSave)
+        val withLocalId = teacherToSave.copy(id = localId)
+
+        // 2. Sync to Cloud Firestore
+        var cloudAssignedId = ""
+        val cloudResult = cloudSyncService?.submitTeacherRegistration(withLocalId)
+        if (cloudResult != null && cloudResult.isSuccess) {
+            cloudAssignedId = cloudResult.getOrNull().orEmpty()
+            if (cloudAssignedId.isNotBlank()) {
+                teacherDao.updateTeacher(withLocalId.copy(cloudId = cloudAssignedId))
+            }
+        }
+
         val msg = if (autoApprove) {
             "تم إنشاء الحساب وتفعيله بنجاح! يمكنك تسجيل الدخول الآن."
         } else {
-            "تم إرسال طلب التسجيل بنجاح! حسابك قيد المراجعة من قِبل إدارة رقيب."
+            "تم إرسال طلبك بنجاح إلى لوحة المالك المركزية! يرجى انتظار الموافقة وتفعيل الحساب."
         }
         return Pair(true, msg)
+    }
+
+    suspend fun approveTeacher(teacher: TeacherEntity, customCode: String? = null): Pair<Boolean, String> {
+        val codeResult = cloudSyncService?.approveTeacher(teacher, customCode)
+        val activationCode = codeResult?.getOrNull()
+            ?: customCode?.takeIf { it.isNotBlank() }
+            ?: "RQ-${(1000..9999).random()}"
+
+        val updated = teacher.copy(
+            status = TeacherEntity.STATUS_APPROVED,
+            isActivated = true,
+            activationCode = activationCode
+        )
+        if (teacher.id != 0L) {
+            teacherDao.updateTeacher(updated)
+        } else {
+            val local = teacherDao.getTeacherByEmailOrPhone(teacher.email)
+            if (local != null) {
+                teacherDao.updateTeacher(updated.copy(id = local.id))
+            } else {
+                teacherDao.insertTeacher(updated)
+            }
+        }
+        return Pair(true, activationCode)
+    }
+
+    suspend fun rejectTeacher(teacher: TeacherEntity, reason: String = "طلب غير مستوفٍ للشروط"): Pair<Boolean, String> {
+        cloudSyncService?.rejectTeacher(teacher, reason)
+        val updated = teacher.copy(
+            status = TeacherEntity.STATUS_REJECTED,
+            isActivated = false,
+            reviewNotes = reason
+        )
+        if (teacher.id != 0L) {
+            teacherDao.updateTeacher(updated)
+        } else {
+            val local = teacherDao.getTeacherByEmailOrPhone(teacher.email)
+            if (local != null) {
+                teacherDao.updateTeacher(updated.copy(id = local.id))
+            }
+        }
+        return Pair(true, "تم رفض الطلب بنجاح")
+    }
+
+    suspend fun suspendTeacher(teacher: TeacherEntity, reason: String = "إيقاف إداري مؤقت"): Pair<Boolean, String> {
+        cloudSyncService?.suspendTeacher(teacher, reason)
+        val updated = teacher.copy(
+            status = TeacherEntity.STATUS_SUSPENDED,
+            isActivated = false,
+            reviewNotes = reason
+        )
+        if (teacher.id != 0L) {
+            teacherDao.updateTeacher(updated)
+        } else {
+            val local = teacherDao.getTeacherByEmailOrPhone(teacher.email)
+            if (local != null) {
+                teacherDao.updateTeacher(updated.copy(id = local.id))
+            }
+        }
+        return Pair(true, "تم تعليق الحساب")
+    }
+
+    suspend fun reactivateTeacher(teacher: TeacherEntity): Pair<Boolean, String> {
+        cloudSyncService?.reactivateTeacher(teacher)
+        val updated = teacher.copy(
+            status = TeacherEntity.STATUS_APPROVED,
+            isActivated = true
+        )
+        if (teacher.id != 0L) {
+            teacherDao.updateTeacher(updated)
+        } else {
+            val local = teacherDao.getTeacherByEmailOrPhone(teacher.email)
+            if (local != null) {
+                teacherDao.updateTeacher(updated.copy(id = local.id))
+            }
+        }
+        return Pair(true, "تمت إعادة التفعيل بنجاح")
+    }
+
+    suspend fun activateWithCode(identifier: String, code: String): Pair<Boolean, String> {
+        val cloudRes = cloudSyncService?.activateWithCode(identifier, code)
+        if (cloudRes != null && cloudRes.isSuccess) {
+            val teacher = cloudRes.getOrNull()!!
+            val local = teacherDao.getTeacherByEmailOrPhone(identifier.trim())
+            if (local != null) {
+                teacherDao.updateTeacher(teacher.copy(id = local.id))
+            } else {
+                teacherDao.insertTeacher(teacher)
+            }
+            return Pair(true, "تم تفعيل حسابك بنجاح! يمكنك الآن استخدام كافة مميزات رقيب.")
+        }
+
+        // Local fallback
+        val local = teacherDao.getTeacherByEmailOrPhone(identifier.trim())
+        if (local != null && local.activationCode.isNotBlank() && local.activationCode.equals(code.trim(), ignoreCase = true)) {
+            val updated = local.copy(status = TeacherEntity.STATUS_APPROVED, isActivated = true)
+            teacherDao.updateTeacher(updated)
+            return Pair(true, "تم تفعيل حسابك بنجاح!")
+        }
+
+        return Pair(false, cloudRes?.exceptionOrNull()?.message ?: "كود التفعيل غير صحيح أو غير مفعل")
+    }
+
+    fun getAuditLogsFlow(): Flow<List<AuditLogEntity>> {
+        return cloudSyncService?.getAuditLogsFlow() ?: kotlinx.coroutines.flow.flowOf(emptyList())
+    }
+
+    suspend fun syncFromCloud(): Int {
+        val cloudTeachers = cloudSyncService?.fetchAllTeachersOnce() ?: emptyList()
+        var count = 0
+        for (ct in cloudTeachers) {
+            val local = teacherDao.getTeacherByEmailOrPhone(ct.email)
+            if (local != null) {
+                val merged = ct.copy(id = local.id)
+                teacherDao.updateTeacher(merged)
+            } else {
+                teacherDao.insertTeacher(ct.copy(id = 0))
+            }
+            count++
+        }
+        return count
     }
 
     suspend fun updateTeacherStatus(id: Long, status: String) {
@@ -52,19 +223,32 @@ class RqeebRepository(
 
     suspend fun updateTeacher(teacher: TeacherEntity) {
         teacherDao.updateTeacher(teacher)
+        try {
+            cloudSyncService?.updateTeacherProfile(teacher)
+        } catch (_: Exception) {}
     }
 
     suspend fun deleteTeacher(id: Long) {
+        val teacher = teacherDao.getTeacherById(id)
+        if (teacher != null && teacher.cloudId.isNotBlank()) {
+            cloudSyncService?.rejectTeacher(teacher, "تم حذف الحساب نهائياً بواسطة المالك")
+        }
         teacherDao.deleteTeacherById(id)
     }
 
     // Owner Settings & Auth
     suspend fun verifyOwner(password: String, emailOrUser: String = ""): Boolean {
+        // Cloud verification first
+        val cloudOk = cloudSyncService?.verifyOwner(password, emailOrUser)
+        if (cloudOk == true) return true
+
         val storedPassword = appSettingDao.getValue("owner_password") ?: "admin123456"
-        val storedEmail = appSettingDao.getValue("owner_email") ?: "admin@rqeeb.edu"
+        val storedEmail = appSettingDao.getValue("owner_email") ?: "abdulrqeebfarag2018@gmail.com"
         val cleanInputUser = emailOrUser.trim()
         val userMatches = cleanInputUser.isEmpty() ||
                 cleanInputUser.equals(storedEmail, ignoreCase = true) ||
+                cleanInputUser.equals("abdulrqeebfarag2018@gmail.com", ignoreCase = true) ||
+                cleanInputUser.equals("admin@rqeeb.edu", ignoreCase = true) ||
                 cleanInputUser.equals("admin", ignoreCase = true) ||
                 cleanInputUser.equals("owner", ignoreCase = true)
         return userMatches && (password.trim() == storedPassword || password.trim() == "admin123456")

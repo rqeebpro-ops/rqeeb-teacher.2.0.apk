@@ -1,0 +1,80 @@
+{
+  "entities": {
+    "TeacherRegistration": {
+      "title": "TeacherRegistration",
+      "description": "Centralized teacher registration, verification and activation request for Rqeeb Smart Teacher Assistant",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique registration ID" },
+        "fullName": { "type": "string", "description": "Teacher full name" },
+        "phone": { "type": "string", "description": "Teacher phone number" },
+        "email": { "type": "string", "description": "Teacher email address" },
+        "schoolName": { "type": "string", "description": "School name" },
+        "governorate": { "type": "string", "description": "Yemeni Governorate" },
+        "directorate": { "type": "string", "description": "Educational Directorate" },
+        "subject": { "type": "string", "description": "Subject taught" },
+        "stage": { "type": "string", "description": "Educational stage" },
+        "gradeTaught": { "type": "string", "description": "Specific grade taught" },
+        "curriculumEdition": { "type": "string", "description": "Curriculum edition (Sana'a / Aden)" },
+        "passwordHash": { "type": "string", "description": "Password hash or encrypted credential" },
+        "status": {
+          "type": "string",
+          "enum": ["PENDING", "APPROVED", "REJECTED", "SUSPENDED"],
+          "description": "Approval status"
+        },
+        "isActivated": { "type": "boolean", "description": "Whether account is currently active" },
+        "activationCode": { "type": "string", "description": "Secure one-time activation code" },
+        "deviceId": { "type": "string", "description": "Client device identifier for fraud prevention" },
+        "appVersion": { "type": "string", "description": "Client app version" },
+        "createdAt": { "type": "string", "description": "ISO timestamp of registration" },
+        "updatedAt": { "type": "string", "description": "ISO timestamp of last status update" },
+        "reviewedBy": { "type": "string", "description": "Admin or owner identifier who reviewed the request" },
+        "reviewNote": { "type": "string", "description": "Administrative notes on decision" }
+      },
+      "required": ["fullName", "phone", "email", "schoolName", "subject", "status"]
+    },
+    "OwnerConfig": {
+      "title": "OwnerConfig",
+      "description": "Central system configuration and owner metadata",
+      "type": "object",
+      "properties": {
+        "ownerEmail": { "type": "string", "description": "Primary owner email" },
+        "ownerPhone": { "type": "string", "description": "Owner support phone number" },
+        "ownerWhatsAppUrl": { "type": "string", "description": "Owner WhatsApp support URL" },
+        "autoApprove": { "type": "boolean", "description": "Whether to auto-approve new registrations" },
+        "registeredOwnerDevice": { "type": "string", "description": "Device info for Realme notification targeting" },
+        "updatedAt": { "type": "string", "description": "ISO timestamp" }
+      },
+      "required": ["ownerEmail"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Administrative audit trail for teacher activation and status changes",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Log entry ID" },
+        "action": { "type": "string", "description": "Action performed (APPROVE, REJECT, SUSPEND, REACTIVATE)" },
+        "targetTeacherId": { "type": "string", "description": "Target teacher ID" },
+        "targetTeacherName": { "type": "string", "description": "Target teacher name" },
+        "performedBy": { "type": "string", "description": "Operator identity (Owner email)" },
+        "timestamp": { "type": "string", "description": "ISO timestamp" },
+        "details": { "type": "string", "description": "Additional context or notes" }
+      },
+      "required": ["action", "targetTeacherId", "performedBy", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/teachers/{teacherId}": {
+      "schema": "TeacherRegistration",
+      "description": "Teacher registration requests and activation statuses"
+    },
+    "/system_config/{configId}": {
+      "schema": "OwnerConfig",
+      "description": "Global system configurations and owner information"
+    },
+    "/audit_logs/{logId}": {
+      "schema": "AuditLog",
+      "description": "Administrative action logs"
+    }
+  }
+}

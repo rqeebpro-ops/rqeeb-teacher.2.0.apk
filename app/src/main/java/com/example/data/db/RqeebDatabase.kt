@@ -23,7 +23,7 @@ import kotlinx.coroutines.launch
         TermPlanEntity::class,
         AppSettingEntity::class
     ],
-    version = 2,
+    version = 4,
     exportSchema = false
 )
 abstract class RqeebDatabase : RoomDatabase() {
@@ -41,6 +41,12 @@ abstract class RqeebDatabase : RoomDatabase() {
         @Volatile
         private var INSTANCE: RqeebDatabase? = null
 
+        val MIGRATION_3_4 = object : androidx.room.migration.Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE teachers ADD COLUMN section TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
         fun getDatabase(context: Context): RqeebDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -48,6 +54,7 @@ abstract class RqeebDatabase : RoomDatabase() {
                     RqeebDatabase::class.java,
                     "rqeeb_yemeni_educational_db"
                 )
+                    .addMigrations(MIGRATION_3_4)
                     .fallbackToDestructiveMigration(dropAllTables = true)
                     .addCallback(DatabaseCallback())
                     .build()
@@ -95,7 +102,8 @@ abstract class RqeebDatabase : RoomDatabase() {
                         directorate = "مديرية التحرير",
                         subject = "الرياضيات",
                         stage = "مرحلة التعليم الأساسي",
-                        gradeTaught = "الصف التاسع الأساسي",
+                        gradeTaught = "9/ إعدادي",
+                        section = "أ",
                         curriculumEdition = "طبعة صنعاء (وزارة التربية والتعليم - صنعاء)",
                         academicYear = "1446-1447هـ / 2024-2025م",
                         status = TeacherEntity.STATUS_APPROVED
@@ -114,7 +122,8 @@ abstract class RqeebDatabase : RoomDatabase() {
                         directorate = "مديرية صيرة",
                         subject = "اللغة العربية",
                         stage = "مرحلة التعليم الثانوي",
-                        gradeTaught = "الصف الأول الثانوي",
+                        gradeTaught = "10/ ثانوي",
+                        section = "ب",
                         curriculumEdition = "طبعة عدن (وزارة التربية والتعليم - عدن)",
                         academicYear = "1446-1447هـ / 2024-2025م",
                         status = TeacherEntity.STATUS_PENDING
@@ -127,7 +136,7 @@ abstract class RqeebDatabase : RoomDatabase() {
                         teacherId = teacherId,
                         title = "حل المعادلات التربيعية بطريقة الفرق بين مربعين",
                         subject = "الرياضيات",
-                        grade = "الصف التاسع الأساسي",
+                        grade = "9/ إعدادي",
                         durationMinutes = 45,
                         schoolName = "مدرسة جمال عبد الناصر للمتفوقين",
                         directorate = "مديرية التحرير",

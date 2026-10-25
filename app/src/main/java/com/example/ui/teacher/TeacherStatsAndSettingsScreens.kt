@@ -16,12 +16,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.ai.GeminiService
 import com.example.data.model.TeacherEntity
+import com.example.data.model.YemeniCurriculum
 import com.example.data.repository.RqeebRepository
 import com.example.ui.theme.StatusApproved
 import kotlinx.coroutines.launch
@@ -164,97 +168,414 @@ fun TeacherSettingsScreen(
 
     var name by remember { mutableStateOf(teacher.fullName) }
     var school by remember { mutableStateOf(teacher.schoolName) }
-    var subject by remember { mutableStateOf(teacher.subject) }
-    var gov by remember { mutableStateOf(teacher.governorate) }
+    var subject by remember { mutableStateOf(teacher.subject.ifBlank { "الرياضيات" }) }
+    var gov by remember { mutableStateOf(teacher.governorate.ifBlank { "أمانة العاصمة" }) }
+    var grade by remember { mutableStateOf(YemeniCurriculum.toDisplayGrade(teacher.gradeTaught.ifBlank { "9/ إعدادي" })) }
+
+    val standardShortSections = listOf("أ", "ب", "ج", "د", "هـ", "و")
+    val initialOption = when {
+        teacher.section.isBlank() -> "لم تُحدد"
+        standardShortSections.contains(teacher.section.trim()) -> teacher.section.trim()
+        else -> "أخرى"
+    }
+    var selectedSectionOption by remember { mutableStateOf(initialOption) }
+    var customSection by remember { mutableStateOf(if (initialOption == "أخرى") teacher.section else "") }
     var isSaved by remember { mutableStateOf(false) }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("إعدادات المعلم والملف الشخصي") },
-                navigationIcon = {
-                    IconButton(onClick = onBack, modifier = Modifier.testTag("settings_back_button")) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "رجوع")
-                    }
-                }
-            )
-        },
-        modifier = modifier
-    ) { innerPadding ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
-            item {
-                Card(
-                    shape = RoundedCornerShape(14.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text("البيانات المهنية للمعلم", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+    var govExpanded by remember { mutableStateOf(false) }
+    var subjectExpanded by remember { mutableStateOf(false) }
+    var gradeExpanded by remember { mutableStateOf(false) }
+    var sectionExpanded by remember { mutableStateOf(false) }
 
-                        OutlinedTextField(value = name, onValueChange = { name = it; isSaved = false }, label = { Text("الاسم الكامل") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                        OutlinedTextField(value = school, onValueChange = { school = it; isSaved = false }, label = { Text("المدرسة / المؤسسة التعليمية") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedTextField(value = subject, onValueChange = { subject = it; isSaved = false }, label = { Text("مادة التدريس") }, singleLine = true, modifier = Modifier.weight(1f))
-                            OutlinedTextField(value = gov, onValueChange = { gov = it; isSaved = false }, label = { Text("المحافظة") }, singleLine = true, modifier = Modifier.weight(1f))
-                        }
+    val sectionDropdownOptions = listOf("لم تُحدد", "أ", "ب", "ج", "د", "هـ", "و", "أخرى")
 
-                        if (isSaved) {
-                            Text("تم حفظ التعديلات بنجاح!", color = StatusApproved, fontSize = 12.sp)
-                        }
-
-                        Button(
-                            onClick = {
-                                coroutineScope.launch {
-                                    val updated = teacher.copy(
-                                        fullName = name.trim(),
-                                        schoolName = school.trim(),
-                                        subject = subject.trim(),
-                                        governorate = gov.trim()
-                                    )
-                                    repository.updateTeacher(updated)
-                                    onTeacherUpdated(updated)
-                                    isSaved = true
-                                    Toast.makeText(context, "تم تحديث الملف الشخصي", Toast.LENGTH_SHORT).show()
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("حفظ التغييرات")
-                        }
-                    }
-                }
-            }
-
-            item {
-                Card(
-                    shape = RoundedCornerShape(14.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("حالة خادم الذكاء الاصطناعي (Gemini)", fontWeight = FontWeight.Bold)
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = {
                         Text(
-                            if (geminiService.isConfigured()) "مفتاح Gemini API متصل ونشط." else "يعمل في وضع المحاكي الذكي المدمج (يمكنك ضبط GEMINI_API_KEY في لوحة Secrets).",
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            "إعدادات المعلم والملف الشخصي",
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = onBack, modifier = Modifier.testTag("settings_back_button")) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "رجوع")
+                        }
+                    }
+                )
+            },
+            modifier = modifier
+        ) { innerPadding ->
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                // Header Profile Summary Card
+                item {
+                    Card(
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(14.dp)
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(14.dp),
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(52.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        Icons.Default.Person,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onPrimary,
+                                        modifier = Modifier.size(28.dp)
+                                    )
+                                }
+                            }
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = teacher.fullName.ifBlank { "المعلم" },
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 17.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = "رقم الهاتف: ${teacher.phone} • ${teacher.status}",
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = "طبعة المنهج: ${teacher.curriculumEdition}",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
                     }
                 }
-            }
 
-            item {
-                Button(
-                    onClick = onLogout,
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                    modifier = Modifier.fillMaxWidth().height(48.dp)
-                ) {
-                    Icon(Icons.Default.Logout, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("تسجيل الخروج من الحساب")
+                // Professional Data Card
+                item {
+                    Card(
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Text(
+                                "البيانات المهنية والتعليمية",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+
+                            // 1. Full Name
+                            OutlinedTextField(
+                                value = name,
+                                onValueChange = { name = it; isSaved = false },
+                                label = { Text("الاسم الكامل") },
+                                leadingIcon = { Icon(Icons.Default.Badge, contentDescription = null) },
+                                singleLine = true,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("settings_teacher_name")
+                            )
+
+                            // 2. School Name
+                            OutlinedTextField(
+                                value = school,
+                                onValueChange = { school = it; isSaved = false },
+                                label = { Text("المدرسة / المؤسسة التعليمية") },
+                                leadingIcon = { Icon(Icons.Default.School, contentDescription = null) },
+                                singleLine = true,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("settings_school_name")
+                            )
+
+                            // 3. Paired Cards: Governorate & Subject (Strictly Equal Width and Height)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                // Governorate Dropdown
+                                ExposedDropdownMenuBox(
+                                    expanded = govExpanded,
+                                    onExpandedChange = { govExpanded = !govExpanded },
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    OutlinedTextField(
+                                        value = gov,
+                                        onValueChange = {},
+                                        readOnly = true,
+                                        label = { Text("المحافظة") },
+                                        leadingIcon = { Icon(Icons.Default.LocationOn, contentDescription = null) },
+                                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = govExpanded) },
+                                        singleLine = true,
+                                        shape = RoundedCornerShape(12.dp),
+                                        modifier = Modifier
+                                            .menuAnchor()
+                                            .fillMaxWidth()
+                                            .testTag("settings_governorate_field")
+                                    )
+                                    ExposedDropdownMenu(
+                                        expanded = govExpanded,
+                                        onDismissRequest = { govExpanded = false }
+                                    ) {
+                                        YemeniCurriculum.GOVERNORATES.forEach { item ->
+                                            DropdownMenuItem(
+                                                text = { Text(item) },
+                                                onClick = {
+                                                    gov = item
+                                                    govExpanded = false
+                                                    isSaved = false
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+
+                                // Subject Dropdown
+                                ExposedDropdownMenuBox(
+                                    expanded = subjectExpanded,
+                                    onExpandedChange = { subjectExpanded = !subjectExpanded },
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    OutlinedTextField(
+                                        value = subject,
+                                        onValueChange = {},
+                                        readOnly = true,
+                                        label = { Text("مادة التدريس") },
+                                        leadingIcon = { Icon(Icons.Default.MenuBook, contentDescription = null) },
+                                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = subjectExpanded) },
+                                        singleLine = true,
+                                        shape = RoundedCornerShape(12.dp),
+                                        modifier = Modifier
+                                            .menuAnchor()
+                                            .fillMaxWidth()
+                                            .testTag("settings_subject_field")
+                                    )
+                                    ExposedDropdownMenu(
+                                        expanded = subjectExpanded,
+                                        onDismissRequest = { subjectExpanded = false }
+                                    ) {
+                                        YemeniCurriculum.SUBJECTS.forEach { item ->
+                                            DropdownMenuItem(
+                                                text = { Text(item) },
+                                                onClick = {
+                                                    subject = item
+                                                    subjectExpanded = false
+                                                    isSaved = false
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            // 4. Paired Cards: Grade & Section (Strictly Equal Width and Height)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                // Grade Dropdown (Using 12 official display names)
+                                ExposedDropdownMenuBox(
+                                    expanded = gradeExpanded,
+                                    onExpandedChange = { gradeExpanded = !gradeExpanded },
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    OutlinedTextField(
+                                        value = grade,
+                                        onValueChange = {},
+                                        readOnly = true,
+                                        label = { Text("الصف الدراسي") },
+                                        leadingIcon = { Icon(Icons.Default.Class, contentDescription = null) },
+                                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = gradeExpanded) },
+                                        singleLine = true,
+                                        shape = RoundedCornerShape(12.dp),
+                                        modifier = Modifier
+                                            .menuAnchor()
+                                            .fillMaxWidth()
+                                            .testTag("settings_grade_field")
+                                    )
+                                    ExposedDropdownMenu(
+                                        expanded = gradeExpanded,
+                                        onDismissRequest = { gradeExpanded = false }
+                                    ) {
+                                        YemeniCurriculum.DISPLAY_GRADES.forEach { item ->
+                                            DropdownMenuItem(
+                                                text = { Text(item) },
+                                                onClick = {
+                                                    grade = item
+                                                    gradeExpanded = false
+                                                    isSaved = false
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+
+                                // Section Dropdown (أ، ب، ج، د، هـ، و، أخرى، لم تُحدد)
+                                ExposedDropdownMenuBox(
+                                    expanded = sectionExpanded,
+                                    onExpandedChange = { sectionExpanded = !sectionExpanded },
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    val sectionDisplayValue = when {
+                                        selectedSectionOption == "لم تُحدد" -> "لم تُحدد"
+                                        selectedSectionOption == "أخرى" -> if (customSection.isNotBlank()) customSection else "أخرى"
+                                        else -> "شعبة $selectedSectionOption"
+                                    }
+                                    OutlinedTextField(
+                                        value = sectionDisplayValue,
+                                        onValueChange = {},
+                                        readOnly = true,
+                                        label = { Text("الشعبة") },
+                                        leadingIcon = { Icon(Icons.Default.Groups, contentDescription = null) },
+                                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = sectionExpanded) },
+                                        singleLine = true,
+                                        shape = RoundedCornerShape(12.dp),
+                                        modifier = Modifier
+                                            .menuAnchor()
+                                            .fillMaxWidth()
+                                            .testTag("settings_section_field")
+                                    )
+                                    ExposedDropdownMenu(
+                                        expanded = sectionExpanded,
+                                        onDismissRequest = { sectionExpanded = false }
+                                    ) {
+                                        sectionDropdownOptions.forEach { item ->
+                                            DropdownMenuItem(
+                                                text = { Text(if (item == "لم تُحدد" || item == "أخرى") item else "شعبة $item") },
+                                                onClick = {
+                                                    selectedSectionOption = item
+                                                    sectionExpanded = false
+                                                    isSaved = false
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            // 5. Custom Section Name Input (Shown when 'أخرى' is selected)
+                            if (selectedSectionOption == "أخرى") {
+                                OutlinedTextField(
+                                    value = customSection,
+                                    onValueChange = { customSection = it; isSaved = false },
+                                    label = { Text("اسم الشعبة المخصصة") },
+                                    placeholder = { Text("مثال: شعبة المتفوقين أو د/2") },
+                                    leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                                    singleLine = true,
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("settings_custom_section_input")
+                                )
+                            }
+
+                            if (isSaved) {
+                                Surface(
+                                    color = StatusApproved.copy(alpha = 0.12f),
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Icon(Icons.Default.CheckCircle, contentDescription = null, tint = StatusApproved)
+                                        Text(
+                                            "تم حفظ بيانات المعلم والشعبة والصف بنجاح!",
+                                            color = StatusApproved,
+                                            fontWeight = FontWeight.Medium,
+                                            fontSize = 13.sp
+                                        )
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(4.dp))
+
+                            // Save Changes Button
+                            Button(
+                                onClick = {
+                                    coroutineScope.launch {
+                                        val finalSection = when (selectedSectionOption) {
+                                            "لم تُحدد" -> ""
+                                            "أخرى" -> customSection.trim()
+                                            else -> selectedSectionOption.trim()
+                                        }
+                                        val updated = teacher.copy(
+                                            fullName = name.trim(),
+                                            schoolName = school.trim(),
+                                            subject = subject.trim(),
+                                            governorate = gov.trim(),
+                                            gradeTaught = grade.trim(),
+                                            section = finalSection,
+                                            stage = YemeniCurriculum.getStageForDisplayGrade(grade.trim())
+                                        )
+                                        repository.updateTeacher(updated)
+                                        onTeacherUpdated(updated)
+                                        isSaved = true
+                                        Toast.makeText(context, "تم حفظ التعديلات بنجاح", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(52.dp)
+                                    .testTag("save_profile_button")
+                            ) {
+                                Icon(Icons.Default.Save, contentDescription = null)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("حفظ التغييرات", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+
+                // Logout Button
+                item {
+                    OutlinedButton(
+                        onClick = onLogout,
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(50.dp)
+                            .testTag("logout_button")
+                    ) {
+                        Icon(Icons.Default.Logout, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("تسجيل الخروج من الحساب", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    }
                 }
             }
         }

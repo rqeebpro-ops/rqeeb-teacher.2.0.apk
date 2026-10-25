@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.data.ai.GeminiService
 import com.example.data.model.TeacherEntity
+import com.example.data.model.YemeniCurriculum
 import com.example.data.repository.RqeebRepository
 import com.example.util.ContactUtils
 import kotlinx.coroutines.launch
@@ -250,8 +251,10 @@ fun TeacherDashboard(
                                 "رقيب - مساعد المعلم الذكي (اليمن)",
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                             )
+                            val displayGrade = YemeniCurriculum.toDisplayGrade(activeTeacher.gradeTaught)
+                            val sectionStr = if (activeTeacher.section.isNotBlank()) " | شعبة ${activeTeacher.section}" else ""
                             Text(
-                                "${activeTeacher.fullName} | ${activeTeacher.subject} - ${activeTeacher.gradeTaught}",
+                                "${activeTeacher.fullName} | ${activeTeacher.subject} - $displayGrade$sectionStr",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

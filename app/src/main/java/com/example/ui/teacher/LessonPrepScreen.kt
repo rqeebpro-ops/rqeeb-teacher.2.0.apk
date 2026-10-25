@@ -62,10 +62,10 @@ fun LessonPrepScreen(
     var schoolName by remember { mutableStateOf(teacher.schoolName.ifBlank { "المدرسة النموذجية" }) }
     var grade by remember {
         mutableStateOf(
-            if (teacher.stage.isNotBlank() && YemeniCurriculum.ALL_GRADES.contains(teacher.stage)) {
-                teacher.stage
+            if (teacher.gradeTaught.isNotBlank()) {
+                YemeniCurriculum.toDisplayGrade(teacher.gradeTaught)
             } else {
-                YemeniCurriculum.ALL_GRADES.first()
+                "9/ إعدادي"
             }
         )
     }
@@ -278,8 +278,9 @@ fun LessonPrepScreen(
                             shape = RoundedCornerShape(12.dp),
                             color = MaterialTheme.colorScheme.primaryContainer
                         ) {
+                            val sec = if (teacher.section.isNotBlank()) " | شعبة ${teacher.section}" else ""
                             Text(
-                                "المعلم: ${teacher.fullName}",
+                                "المعلم: ${teacher.fullName}$sec",
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onPrimaryContainer,

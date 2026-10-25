@@ -20,10 +20,16 @@ data class TeacherEntity(
     val subject: String,
     val stage: String, // مرحلة التعليم الأساسي / مرحلة التعليم الثانوي
     val gradeTaught: String = "", // الصف الذي يدرسه
+    val section: String = "", // الشعبة الدراسية (أ، ب، ج، ...) أو مخصصة
     val curriculumEdition: String = "طبعة صنعاء (وزارة التربية والتعليم - صنعاء)", // طبعة صنعاء / طبعة عدن
     val academicYear: String = "1446-1447هـ / 2024-2025م",
     val status: String = STATUS_APPROVED, // APPROVED, PENDING, SUSPENDED, REJECTED
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    val cloudId: String = "",
+    val activationCode: String = "",
+    val isActivated: Boolean = (status == STATUS_APPROVED),
+    val deviceModel: String = "",
+    val reviewNotes: String = ""
 ) {
     companion object {
         const val STATUS_APPROVED = "APPROVED"
@@ -32,6 +38,19 @@ data class TeacherEntity(
         const val STATUS_REJECTED = "REJECTED"
     }
 }
+
+/**
+ * Audit log entry for administrative actions performed by the Owner
+ */
+data class AuditLogEntity(
+    val id: String = "",
+    val action: String = "", // APPROVE, REJECT, SUSPEND, REACTIVATE, CODE_GENERATED
+    val targetTeacherId: String = "",
+    val targetTeacherName: String = "",
+    val performedBy: String = "",
+    val timestamp: Long = System.currentTimeMillis(),
+    val details: String = ""
+)
 
 /**
  * Prepared Lesson Entity according to the official Yemeni Lesson Plan template

@@ -22,10 +22,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.example.data.ai.GeminiService
+import com.example.data.model.AuditLogEntity
 import com.example.data.model.TeacherEntity
 import com.example.data.model.YemeniCurriculum
 import com.example.data.repository.RqeebRepository
@@ -46,21 +48,29 @@ fun OwnerDashboard(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    var selectedTab by remember { mutableIntStateOf(0) } // 0: Teachers, 1: Stats, 2: Settings & Contact
+    var selectedTab by remember { mutableIntStateOf(0) } // 0: Teachers, 1: Stats, 2: Audit Logs, 3: Settings & Contact
 
     // Teachers List State
     val teachers by repository.allTeachers.collectAsState(initial = emptyList())
     val totalTeachers by repository.totalTeachersCount.collectAsState(initial = 0)
     val totalLessons by repository.totalLessonsCount.collectAsState(initial = 0)
     val totalExams by repository.totalExamsCount.collectAsState(initial = 0)
+    val auditLogs by repository.getAuditLogsFlow().collectAsState(initial = emptyList())
 
     var searchQuery by remember { mutableStateOf("") }
     var filterStatus by remember { mutableStateOf("ALL") }
     var filterGov by remember { mutableStateOf("ALL") }
+    var isSyncingCloud by remember { mutableStateOf(false) }
 
     // Dialog states
     var teacherToDelete by remember { mutableStateOf<TeacherEntity?>(null) }
     var teacherDetailsToShow by remember { mutableStateOf<TeacherEntity?>(null) }
+    var teacherToApprove by remember { mutableStateOf<TeacherEntity?>(null) }
+    var approvalCodeInput by remember { mutableStateOf("") }
+    var teacherToReject by remember { mutableStateOf<TeacherEntity?>(null) }
+    var rejectReasonInput by remember { mutableStateOf("") }
+    var teacherToSuspend by remember { mutableStateOf<TeacherEntity?>(null) }
+    var suspendReasonInput by remember { mutableStateOf("") }
 
     // Settings States
     var autoApproveState by remember { mutableStateOf(true) }
@@ -158,6 +168,33 @@ fun OwnerDashboard(
                 },
                 actions = {
                     IconButton(
+                        onClick = {
+                            coroutineScope.launch {
+                                isSyncingCloud = true
+                                val syncedCount = repository.syncFromCloud()
+                                isSyncingCloud = false
+                                Toast.makeText(context, "تمت المزامنة السحابية بنجاح ($syncedCount معلماً)", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        enabled = !isSyncingCloud,
+                        modifier = Modifier.testTag("owner_cloud_sync_button")
+                    ) {
+                        if (isSyncingCloud) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        } else {
+                            Icon(
+                                Icons.Default.CloudSync,
+                                contentDescription = "مزامنة سحابية مع فايربيس",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+
+                    IconButton(
                         onClick = onLogout,
                         modifier = Modifier.testTag("owner_logout_button")
                     ) {
@@ -178,7 +215,22 @@ fun OwnerDashboard(
                 NavigationBarItem(
                     selected = selectedTab == 0,
                     onClick = { selectedTab = 0 },
-                    icon = { Icon(Icons.Default.People, contentDescription = null) },
+                    icon = {
+                        BadgedBox(
+                            badge = {
+                                if (pendingCount > 0) {
+                                    Badge(
+                                        containerColor = MaterialTheme.colorScheme.error,
+                                        contentColor = MaterialTheme.colorScheme.onError
+                                    ) {
+                                        Text("$pendingCount")
+                                    }
+                                }
+                            }
+                        ) {
+                            Icon(Icons.Default.People, contentDescription = null)
+                        }
+                    },
                     label = { Text("المعلمون ($totalTeachers)") }
                 )
                 NavigationBarItem(
@@ -190,6 +242,12 @@ fun OwnerDashboard(
                 NavigationBarItem(
                     selected = selectedTab == 2,
                     onClick = { selectedTab = 2 },
+                    icon = { Icon(Icons.Default.History, contentDescription = null) },
+                    label = { Text("سجل العمليات (${auditLogs.size})") }
+                )
+                NavigationBarItem(
+                    selected = selectedTab == 3,
+                    onClick = { selectedTab = 3 },
                     icon = { Icon(Icons.Default.Settings, contentDescription = null) },
                     label = { Text("الإعدادات والتواصل") }
                 )
@@ -219,6 +277,43 @@ fun OwnerDashboard(
                             KpiMiniCard("النشطون", "$activeCount", StatusApproved, Modifier.weight(1f))
                             KpiMiniCard("بانتظار المراجعة", "$pendingCount", StatusPending, Modifier.weight(1f))
                             KpiMiniCard("المعلقون", "$suspendedCount", StatusSuspended, Modifier.weight(1f))
+                        }
+
+                        // Pending Requests Alert Notification Banner for Realme Owner
+                        if (pendingCount > 0) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Card(
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { filterStatus = "PENDING" }
+                                    .testTag("pending_requests_alert_banner")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Default.NotificationsActive,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "🔔 يوجد $pendingCount طلب تفعيل معلم جديد بانتظار المراجعة",
+                                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                            color = MaterialTheme.colorScheme.onErrorContainer
+                                        )
+                                        Text(
+                                            text = "اضغط هنا لتصفية الطلبات المعلقة واعتماد أكواد التفعيل فوراً",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onErrorContainer
+                                        )
+                                    }
+                                }
+                            }
                         }
 
                         Spacer(modifier = Modifier.height(12.dp))
@@ -292,24 +387,40 @@ fun OwnerDashboard(
                                         teacher = teacher,
                                         onViewDetails = { teacherDetailsToShow = teacher },
                                         onApprove = {
-                                            coroutineScope.launch {
-                                                repository.updateTeacherStatus(teacher.id, TeacherEntity.STATUS_APPROVED)
-                                                Toast.makeText(context, "تم تفعيل حساب المعلم بنجاح", Toast.LENGTH_SHORT).show()
-                                            }
+                                            val randomCode = "RQ-${(1000..9999).random()}-${('A'..'Z').random()}"
+                                            approvalCodeInput = randomCode
+                                            teacherToApprove = teacher
                                         },
                                         onSuspend = {
-                                            coroutineScope.launch {
-                                                repository.updateTeacherStatus(teacher.id, TeacherEntity.STATUS_SUSPENDED)
-                                                Toast.makeText(context, "تم تعليق حساب المعلم", Toast.LENGTH_SHORT).show()
-                                            }
+                                            suspendReasonInput = "إيقاف مؤقت للحساب"
+                                            teacherToSuspend = teacher
                                         },
                                         onReject = {
+                                            rejectReasonInput = "بيانات التسجيل غير مكتملة"
+                                            teacherToReject = teacher
+                                        },
+                                        onReactivate = {
                                             coroutineScope.launch {
-                                                repository.updateTeacherStatus(teacher.id, TeacherEntity.STATUS_REJECTED)
-                                                Toast.makeText(context, "تم رفض الطلب", Toast.LENGTH_SHORT).show()
+                                                repository.reactivateTeacher(teacher)
+                                                Toast.makeText(context, "تمت إعادة تفعيل حساب المعلم بنجاح", Toast.LENGTH_SHORT).show()
                                             }
                                         },
-                                        onDelete = { teacherToDelete = teacher }
+                                        onDelete = { teacherToDelete = teacher },
+                                        onCopyCode = {
+                                            if (teacher.activationCode.isNotBlank()) {
+                                                ContactUtils.copyToClipboard(context, "كود التفعيل", teacher.activationCode)
+                                            }
+                                        },
+                                        onSendWhatsApp = {
+                                            if (teacher.phone.isNotBlank()) {
+                                                val msg = if (teacher.activationCode.isNotBlank()) {
+                                                    "مرحباً يا أستاذ ${teacher.fullName}، كود التفعيل الخاص بحسابك في تطبيق «رقيب – مساعد المعلم الذكي» هو:\n${teacher.activationCode}"
+                                                } else {
+                                                    "مرحباً يا أستاذ ${teacher.fullName}، نود التواصل معك بشأن حسابك في تطبيق «رقيب – مساعد المعلم الذكي»."
+                                                }
+                                                ContactUtils.openTeacherWhatsApp(context, teacher.phone, msg)
+                                            }
+                                        }
                                     )
                                 }
                             }
@@ -330,6 +441,13 @@ fun OwnerDashboard(
                 }
 
                 2 -> {
+                    // Audit Logs Section
+                    OwnerAuditLogsSection(
+                        auditLogs = auditLogs
+                    )
+                }
+
+                3 -> {
                     // Owner Settings, WhatsApp Contact, and System Diagnostics
                     OwnerSettingsAndContactSection(
                         autoApprove = autoApproveState,
@@ -462,6 +580,241 @@ fun OwnerDashboard(
         )
     }
 
+    // Approve & Generate Activation Code Dialog
+    if (teacherToApprove != null) {
+        val t = teacherToApprove!!
+        AlertDialog(
+            onDismissRequest = { teacherToApprove = null },
+            icon = {
+                Icon(
+                    Icons.Default.VerifiedUser,
+                    contentDescription = null,
+                    tint = StatusApproved,
+                    modifier = Modifier.size(36.dp)
+                )
+            },
+            title = {
+                Text(
+                    "الموافقة وتوليد كود التفعيل",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    textAlign = TextAlign.Center
+                )
+            },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        "المعلم: ${t.fullName}",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
+                    )
+                    Text(
+                        "المدرسة: ${t.schoolName} | المحافظة: ${t.governorate}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        "هاتف المعلم: ${t.phone}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (t.deviceModel.isNotBlank()) {
+                        Text(
+                            "هاتف التسجيل: ${t.deviceModel}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    OutlinedTextField(
+                        value = approvalCodeInput,
+                        onValueChange = { approvalCodeInput = it.uppercase() },
+                        label = { Text("كود التفعيل المخصص") },
+                        trailingIcon = {
+                            IconButton(onClick = {
+                                approvalCodeInput = "RQ-${(1000..9999).random()}-${('A'..'Z').random()}"
+                            }) {
+                                Icon(Icons.Default.Refresh, contentDescription = "توليد كود جديد")
+                            }
+                        },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("approval_code_input")
+                    )
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                ContactUtils.copyToClipboard(context, "كود التفعيل", approvalCodeInput)
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("نسخ الكود", fontSize = 12.sp)
+                        }
+
+                        Button(
+                            onClick = {
+                                val greeting = "أهلاً وسهلاً بك يا أستاذ ${t.fullName} في منصة «رقيب – مساعد المعلم الذكي».\nتمت الموافقة على طلب تسجيلك بنجاح!\nكود التفعيل الخاص بحسابك هو:\n$approvalCodeInput\nيمكنك الآن إدخال الكود في التطبيق واستخدامه بالكامل."
+                                ContactUtils.openTeacherWhatsApp(context, t.phone, greeting)
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF25D366)),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("واتساب", fontSize = 12.sp, color = Color.White)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val code = approvalCodeInput.trim().ifBlank {
+                            "RQ-${(1000..9999).random()}-${('A'..'Z').random()}"
+                        }
+                        coroutineScope.launch {
+                            repository.approveTeacher(t, code)
+                            teacherToApprove = null
+                            Toast.makeText(context, "تم اعتماد التفعيل ومزامنته سحابياً بنجاح", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = StatusApproved),
+                    modifier = Modifier.testTag("confirm_approval_button")
+                ) {
+                    Text("تأكيد التفعيل وحفظه سحابياً")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { teacherToApprove = null }) {
+                    Text("إلغاء")
+                }
+            }
+        )
+    }
+
+    // Reject Dialog
+    if (teacherToReject != null) {
+        val t = teacherToReject!!
+        AlertDialog(
+            onDismissRequest = { teacherToReject = null },
+            icon = {
+                Icon(
+                    Icons.Default.Cancel,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(36.dp)
+                )
+            },
+            title = {
+                Text(
+                    "رفض طلب تسجيل المعلم",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                )
+            },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("المعلم: ${t.fullName} (${t.schoolName})")
+                    OutlinedTextField(
+                        value = rejectReasonInput,
+                        onValueChange = { rejectReasonInput = it },
+                        label = { Text("سبب الرفض (اختياري)") },
+                        placeholder = { Text("مثال: بيانات غير مكتملة") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        coroutineScope.launch {
+                            repository.rejectTeacher(t, rejectReasonInput)
+                            teacherToReject = null
+                            Toast.makeText(context, "تم رفض الطلب وحفظ القرار سحابياً", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("تأكيد الرفض")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { teacherToReject = null }) {
+                    Text("إلغاء")
+                }
+            }
+        )
+    }
+
+    // Suspend Dialog
+    if (teacherToSuspend != null) {
+        val t = teacherToSuspend!!
+        AlertDialog(
+            onDismissRequest = { teacherToSuspend = null },
+            icon = {
+                Icon(
+                    Icons.Default.PauseCircle,
+                    contentDescription = null,
+                    tint = StatusSuspended,
+                    modifier = Modifier.size(36.dp)
+                )
+            },
+            title = {
+                Text(
+                    "تعليق حساب المعلم",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                )
+            },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("المعلم: ${t.fullName}")
+                    OutlinedTextField(
+                        value = suspendReasonInput,
+                        onValueChange = { suspendReasonInput = it },
+                        label = { Text("سبب الإيقاف المؤقت (اختياري)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        coroutineScope.launch {
+                            repository.suspendTeacher(t, suspendReasonInput)
+                            teacherToSuspend = null
+                            Toast.makeText(context, "تم تعليق الحساب ومزامنة القرار سحابياً", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = StatusSuspended)
+                ) {
+                    Text("تأكيد التعليق")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { teacherToSuspend = null }) {
+                    Text("إلغاء")
+                }
+            }
+        )
+    }
+
     // Teacher Details Dialog
     if (teacherDetailsToShow != null) {
         val t = teacherDetailsToShow!!
@@ -499,6 +852,12 @@ fun OwnerDashboard(
                     ProfileItemRow("المادة التخصصية:", t.subject)
                     ProfileItemRow("المرحلة والصف:", "${t.stage} - ${t.gradeTaught}")
                     ProfileItemRow("طبعة المنهج المعتمدة:", t.curriculumEdition)
+                    ProfileItemRow("طراز الهاتف:", if (t.deviceModel.isNotBlank()) t.deviceModel else "هاتف أندرويد")
+                    ProfileItemRow("كود التفعيل:", if (t.activationCode.isNotBlank()) t.activationCode else "لم يصدر بعد")
+                    ProfileItemRow("المعرف السحابي:", if (t.cloudId.isNotBlank()) t.cloudId else "محلي")
+                    if (t.reviewNotes.isNotBlank()) {
+                        ProfileItemRow("ملاحظات المراجعة:", t.reviewNotes)
+                    }
                     ProfileItemRow("تاريخ التسجيل:", dateStr)
                     ProfileItemRow("حالة الحساب:", when (t.status) {
                         TeacherEntity.STATUS_APPROVED -> "مفعل ومتاح للاستخدام"
@@ -506,6 +865,37 @@ fun OwnerDashboard(
                         TeacherEntity.STATUS_SUSPENDED -> "معلق وموقوف مؤقتاً"
                         else -> "مرفوض"
                     })
+
+                    if (t.activationCode.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    ContactUtils.copyToClipboard(context, "كود التفعيل", t.activationCode)
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("نسخ الكود", fontSize = 11.sp)
+                            }
+                            Button(
+                                onClick = {
+                                    val msg = "مرحباً يا أستاذ ${t.fullName}، كود التفعيل الخاص بحسابك في تطبيق «رقيب – مساعد المعلم الذكي» هو:\n${t.activationCode}"
+                                    ContactUtils.openTeacherWhatsApp(context, t.phone, msg)
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF25D366)),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("واتساب", fontSize = 11.sp, color = Color.White)
+                            }
+                        }
+                    }
 
                     Spacer(modifier = Modifier.height(14.dp))
 
@@ -528,7 +918,10 @@ fun TeacherAccountCard(
     onApprove: () -> Unit,
     onSuspend: () -> Unit,
     onReject: () -> Unit,
+    onReactivate: () -> Unit,
     onDelete: () -> Unit,
+    onCopyCode: (() -> Unit)? = null,
+    onSendWhatsApp: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     Card(
@@ -570,10 +963,59 @@ fun TeacherAccountCard(
             Spacer(modifier = Modifier.height(6.dp))
 
             Text(
-                "📱 ${teacher.phone} | 🏫 ${teacher.curriculumEdition}",
+                "📱 ${teacher.phone} | 🏫 ${teacher.curriculumEdition}${if (teacher.deviceModel.isNotBlank()) " | 📲 ${teacher.deviceModel}" else ""}",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+
+            // Activation Code Badge if available
+            if (teacher.activationCode.isNotBlank()) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.VpnKey,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            "كود التفعيل: ${teacher.activationCode}",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        if (onCopyCode != null) {
+                            Spacer(modifier = Modifier.width(4.dp))
+                            IconButton(onClick = onCopyCode, modifier = Modifier.size(22.dp)) {
+                                Icon(
+                                    Icons.Default.ContentCopy,
+                                    contentDescription = "نسخ الكود",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
+                        }
+                        if (onSendWhatsApp != null) {
+                            IconButton(onClick = onSendWhatsApp, modifier = Modifier.size(22.dp)) {
+                                Icon(
+                                    Icons.Default.Share,
+                                    contentDescription = "إرسال واتساب",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
 
             Spacer(modifier = Modifier.height(10.dp))
 
@@ -600,14 +1042,14 @@ fun TeacherAccountCard(
                             contentPadding = PaddingValues(horizontal = 10.dp),
                             modifier = Modifier.height(34.dp)
                         ) {
-                            Text("تفعيل الحساب", fontSize = 12.sp)
+                            Text("موافقة وتوليد كود", fontSize = 11.sp)
                         }
                         OutlinedButton(
                             onClick = onReject,
                             contentPadding = PaddingValues(horizontal = 8.dp),
                             modifier = Modifier.height(34.dp)
                         ) {
-                            Text("رفض", fontSize = 12.sp)
+                            Text("رفض", fontSize = 11.sp)
                         }
                     }
                     TeacherEntity.STATUS_APPROVED -> {
@@ -622,7 +1064,7 @@ fun TeacherAccountCard(
                     }
                     TeacherEntity.STATUS_SUSPENDED -> {
                         Button(
-                            onClick = onApprove,
+                            onClick = onReactivate,
                             colors = ButtonDefaults.buttonColors(containerColor = StatusApproved),
                             contentPadding = PaddingValues(horizontal = 8.dp),
                             modifier = Modifier.height(34.dp)
@@ -632,12 +1074,12 @@ fun TeacherAccountCard(
                     }
                     TeacherEntity.STATUS_REJECTED -> {
                         Button(
-                            onClick = onApprove,
+                            onClick = onReactivate,
                             colors = ButtonDefaults.buttonColors(containerColor = StatusApproved),
                             contentPadding = PaddingValues(horizontal = 8.dp),
                             modifier = Modifier.height(34.dp)
                         ) {
-                            Text("قبول", fontSize = 12.sp)
+                            Text("إعادة تفعيل", fontSize = 12.sp)
                         }
                     }
                 }
@@ -1180,6 +1622,158 @@ fun OwnerSettingsAndContactSection(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text("حفظ كلمة المرور")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun OwnerAuditLogsSection(
+    auditLogs: List<AuditLogEntity>,
+    modifier: Modifier = Modifier
+) {
+    if (auditLogs.isEmpty()) {
+        Box(
+            modifier = modifier
+                .fillMaxSize()
+                .padding(24.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                    modifier = Modifier.size(72.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            Icons.Default.History,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(36.dp)
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    "لا توجد عمليات إدارية مسجلة بعد",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    "يتم توثيق وحفظ جميع قرارات الموافقة، الرفض، التعليق، وإعادة التفعيل سحابياً في فايربيس فور إجرائها.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+            }
+        }
+    } else {
+        LazyColumn(
+            modifier = modifier
+                .fillMaxSize()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "سجل الإجراءات الإدارية الموثقة سحابياً (${auditLogs.size})",
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "مرتبة زمنياً",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            items(auditLogs, key = { it.id.ifBlank { "${it.timestamp}_${it.action}_${it.targetTeacherId}" } }) { log ->
+                val timeStr = SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.getDefault()).format(Date(log.timestamp))
+                Card(
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = when (log.action) {
+                                    "APPROVE" -> StatusApproved.copy(alpha = 0.15f)
+                                    "REJECT" -> MaterialTheme.colorScheme.errorContainer
+                                    "SUSPEND" -> StatusSuspended.copy(alpha = 0.15f)
+                                    "REACTIVATE" -> MaterialTheme.colorScheme.primaryContainer
+                                    else -> MaterialTheme.colorScheme.surfaceVariant
+                                }
+                            ) {
+                                Text(
+                                    text = when (log.action) {
+                                        "APPROVE" -> "موافقة وتفعيل"
+                                        "REJECT" -> "رفض الطلب"
+                                        "SUSPEND" -> "إيقاف / تعليق"
+                                        "REACTIVATE" -> "إعادة تفعيل"
+                                        else -> log.action
+                                    },
+                                    color = when (log.action) {
+                                        "APPROVE" -> StatusApproved
+                                        "REJECT" -> MaterialTheme.colorScheme.error
+                                        "SUSPEND" -> StatusSuspended
+                                        "REACTIVATE" -> MaterialTheme.colorScheme.primary
+                                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+                            Text(
+                                text = timeStr,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Text(
+                            text = "المعلم: ${log.targetTeacherName}",
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+
+                        if (log.details.isNotBlank()) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = log.details,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "بواسطة: ${log.performedBy}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
                     }
                 }
             }

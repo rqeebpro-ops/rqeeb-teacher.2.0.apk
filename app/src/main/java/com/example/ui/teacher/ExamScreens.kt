@@ -73,7 +73,17 @@ fun ExamGeneratorScreen(
     // Tab 0 State: General Exam Maker
     var title by remember { mutableStateOf("") }
     var subject by remember { mutableStateOf(teacher.subject) }
-    var grade by remember { mutableStateOf(teacher.stage) }
+    var grade by remember {
+        mutableStateOf(
+            if (teacher.gradeTaught.isNotBlank()) {
+                YemeniCurriculum.toDisplayGrade(teacher.gradeTaught)
+            } else if (teacher.stage.isNotBlank()) {
+                YemeniCurriculum.toDisplayGrade(teacher.stage)
+            } else {
+                "9/ إعدادي"
+            }
+        )
+    }
     var examType by remember { mutableStateOf(YemeniCurriculum.EXAM_TYPES[1]) }
     var difficulty by remember { mutableStateOf("متوسط") }
     var questionCount by remember { mutableIntStateOf(5) }
@@ -93,7 +103,17 @@ fun ExamGeneratorScreen(
         mutableStateOf("إذا كان 3س + 5 = 20، فأوجد قيمة س موضحاً خطوات الحل.")
     }
     var seedSubject by remember { mutableStateOf(teacher.subject) }
-    var seedGrade by remember { mutableStateOf(teacher.stage) }
+    var seedGrade by remember {
+        mutableStateOf(
+            if (teacher.gradeTaught.isNotBlank()) {
+                YemeniCurriculum.toDisplayGrade(teacher.gradeTaught)
+            } else if (teacher.stage.isNotBlank()) {
+                YemeniCurriculum.toDisplayGrade(teacher.stage)
+            } else {
+                "9/ إعدادي"
+            }
+        )
+    }
     var seedTopic by remember { mutableStateOf("حل المعادلات الخطية من الدرجة الأولى") }
     var seedDifficulty by remember { mutableStateOf("متوسط") }
     var seedStrategy by remember { mutableStateOf(VariantStrategy.CHANGE_NUMBERS) }

@@ -42,29 +42,73 @@ object YemeniCurriculum {
         "ريمة"
     )
 
-    // Grades for Basic Education (التعليم الأساسي: من الأول إلى التاسع)
-    val BASIC_GRADES = listOf(
-        "الصف الأول الأساسي",
-        "الصف الثاني الأساسي",
-        "الصف الثالث الأساسي",
-        "الصف الرابع الأساسي",
-        "الصف الخامس الأساسي",
-        "الصف السادس الأساسي",
-        "الصف السابع الأساسي",
-        "الصف الثامن الأساسي",
-        "الصف التاسع الأساسي (الشهادة الأساسية)"
+    // Official Display Names for Grades in Rqeeb Teacher App (الأسماء الرسمية المعتمدة للعرض)
+    val DISPLAY_GRADES = listOf(
+        "1/ أساسي",
+        "2/ أساسي",
+        "3/ أساسي",
+        "4/ أساسي",
+        "5/ أساسي",
+        "6/ أساسي",
+        "7/ إعدادي",
+        "8/ إعدادي",
+        "9/ إعدادي",
+        "10/ ثانوي",
+        "11/ ثانوي",
+        "12/ ثانوي"
     )
 
-    // Grades for Secondary Education (التعليم الثانوي: من العاشر إلى الثاني عشر)
-    val SECONDARY_GRADES = listOf(
-        "الصف العاشر (الأول الثانوي)",
-        "الصف الحادي عشر (الثاني الثانوي - علمي)",
-        "الصف الحادي عشر (الثاني الثانوي - أدبي)",
-        "الصف الثاني عشر (الثالث الثانوي - علمي)",
-        "الصف الثاني عشر (الثالث الثانوي - أدبي)"
+    // Standard school divisions/sections in Yemeni schools (شعب الفصول المعتمدة)
+    val STANDARD_SECTIONS = listOf(
+        "أ",
+        "ب",
+        "ج",
+        "د",
+        "هـ",
+        "و",
+        "أخرى"
     )
 
-    val ALL_GRADES = BASIC_GRADES + SECONDARY_GRADES
+    // Legacy lists preserved for internal backwards compatibility
+    val BASIC_GRADES = DISPLAY_GRADES.take(9)
+    val SECONDARY_GRADES = DISPLAY_GRADES.takeLast(3)
+    val ALL_GRADES = DISPLAY_GRADES
+
+    /**
+     * Converts any stored grade string (legacy full name or number) to the official display name
+     */
+    fun toDisplayGrade(grade: String): String {
+        val trimmed = grade.trim()
+        if (DISPLAY_GRADES.contains(trimmed)) return trimmed
+
+        return when {
+            trimmed.contains("الأول الأساسي") || trimmed == "1" || trimmed.startsWith("1/") || trimmed.contains("الاول") -> "1/ أساسي"
+            trimmed.contains("الثاني الأساسي") || trimmed == "2" || trimmed.startsWith("2/") -> "2/ أساسي"
+            trimmed.contains("الثالث الأساسي") || trimmed == "3" || trimmed.startsWith("3/") -> "3/ أساسي"
+            trimmed.contains("الرابع الأساسي") || trimmed == "4" || trimmed.startsWith("4/") -> "4/ أساسي"
+            trimmed.contains("الخامس الأساسي") || trimmed == "5" || trimmed.startsWith("5/") -> "5/ أساسي"
+            trimmed.contains("السادس الأساسي") || trimmed == "6" || trimmed.startsWith("6/") -> "6/ أساسي"
+            trimmed.contains("السابع") || trimmed == "7" || trimmed.startsWith("7/") -> "7/ إعدادي"
+            trimmed.contains("الثامن") || trimmed == "8" || trimmed.startsWith("8/") -> "8/ إعدادي"
+            trimmed.contains("التاسع") || trimmed == "9" || trimmed.startsWith("9/") -> "9/ إعدادي"
+            trimmed.contains("العاشر") || trimmed.contains("الأول الثانوي") || trimmed == "10" || trimmed.startsWith("10/") -> "10/ ثانوي"
+            trimmed.contains("الحادي عشر") || trimmed.contains("الثاني الثانوي") || trimmed == "11" || trimmed.startsWith("11/") -> "11/ ثانوي"
+            trimmed.contains("الثاني عشر") || trimmed.contains("الثالث الثانوي") || trimmed == "12" || trimmed.startsWith("12/") -> "12/ ثانوي"
+            else -> if (trimmed.isNotBlank()) trimmed else "9/ إعدادي"
+        }
+    }
+
+    /**
+     * Maps display grade to official stage in Yemen
+     */
+    fun getStageForDisplayGrade(displayGrade: String): String {
+        return when {
+            displayGrade.contains("أساسي") -> "مرحلة التعليم الأساسي"
+            displayGrade.contains("إعدادي") -> "المرحلة الإعدادية"
+            displayGrade.contains("ثانوي") -> "مرحلة التعليم الثانوي"
+            else -> "مرحلة التعليم الأساسي"
+        }
+    }
 
     // Subjects in Yemeni Schools
     val SUBJECTS = listOf(
@@ -86,23 +130,21 @@ object YemeniCurriculum {
 
     fun getSubjectsForGrade(grade: String): List<String> {
         return when {
-            grade.contains("الأول الأساسي") || grade.contains("الثاني الأساسي") || grade.contains("الثالث الأساسي") -> {
+            grade.contains("1/") || grade.contains("2/") || grade.contains("3/") ||
+                    grade.contains("الأول") || grade.contains("الثاني") || grade.contains("الثالث") -> {
                 listOf("القرآن الكريم", "التربية الإسلامية", "اللغة العربية", "الرياضيات", "العلوم والبيئة")
             }
-            grade.contains("الرابع الأساسي") || grade.contains("الخامس الأساسي") || grade.contains("السادس الأساسي") -> {
+            grade.contains("4/") || grade.contains("5/") || grade.contains("6/") ||
+                    grade.contains("الرابع") || grade.contains("الخامس") || grade.contains("السادس") -> {
                 listOf("القرآن الكريم", "التربية الإسلامية", "اللغة العربية", "الرياضيات", "العلوم", "الاجتماعيات", "اللغة الإنجليزية")
             }
-            grade.contains("السابع الأساسي") || grade.contains("الثامن الأساسي") || grade.contains("التاسع الأساسي") -> {
+            grade.contains("7/") || grade.contains("8/") || grade.contains("9/") ||
+                    grade.contains("إعدادي") || grade.contains("السابع") || grade.contains("الثامن") || grade.contains("التاسع") -> {
                 listOf("القرآن الكريم", "التربية الإسلامية", "اللغة العربية", "الرياضيات", "العلوم", "الاجتماعيات", "اللغة الإنجليزية", "الحاسوب")
             }
-            grade.contains("العاشر") || grade.contains("الأول الثانوي") -> {
+            grade.contains("10/") || grade.contains("11/") || grade.contains("12/") ||
+                    grade.contains("ثانوي") || grade.contains("العاشر") -> {
                 listOf("القرآن الكريم", "التربية الإسلامية", "اللغة العربية", "اللغة الإنجليزية", "الرياضيات", "الفيزياء", "الكيمياء", "الأحياء", "التاريخ", "الجغرافيا", "التربية الوطنية", "الحاسوب")
-            }
-            grade.contains("علمي") -> {
-                listOf("القرآن الكريم", "التربية الإسلامية", "اللغة العربية", "اللغة الإنجليزية", "الرياضيات", "الفيزياء", "الكيمياء", "الأحياء", "الجيولوجيا")
-            }
-            grade.contains("أدبي") -> {
-                listOf("القرآن الكريم", "التربية الإسلامية", "اللغة العربية", "اللغة الإنجليزية", "الرياضيات العامة", "التاريخ", "الجغرافيا", "علم النفس والاجتماع", "المنطق والفلسفة")
             }
             else -> SUBJECTS
         }

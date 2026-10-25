@@ -286,7 +286,8 @@ fun AuthScreen(
                             ownerIdentifier = it
                             ownerErrorMessage = null
                         },
-                        label = { Text("البريد الإلكتروني أو اسم المستخدم") },
+                        label = { Text("البريد الإلكتروني للمالك (abdulrqeebfarag2018@gmail.com)") },
+                        placeholder = { Text("abdulrqeebfarag2018@gmail.com") },
                         leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) },
                         singleLine = true,
                         modifier = Modifier
@@ -400,6 +401,11 @@ fun TeacherLoginForm(
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(false) }
     var showForgotPasswordDialog by remember { mutableStateOf(false) }
+    var showActivationDialog by remember { mutableStateOf(false) }
+    var activationIdentifierInput by remember { mutableStateOf("") }
+    var activationCodeInput by remember { mutableStateOf("") }
+    var activationMessage by remember { mutableStateOf<String?>(null) }
+    var isActivating by remember { mutableStateOf(false) }
 
     Card(
         modifier = modifier,
@@ -526,7 +532,8 @@ fun TeacherLoginForm(
 
                         when (teacher.status) {
                             TeacherEntity.STATUS_PENDING -> {
-                                errorMessage = "حسابك قيد المراجعة حالياً من إدارة رقيب، يرجى انتظار التفعيل."
+                                errorMessage = "حسابك قيد المراجعة حالياً من إدارة رقيب. إذا استلمت كود التفعيل من المالك، اضغط على زر تفعيل الحساب بالكود أدناه."
+                                activationIdentifierInput = identifier
                             }
                             TeacherEntity.STATUS_SUSPENDED -> {
                                 errorMessage = "تم تعليق هذا الحساب بواسطة إدارة النظام. للتواصل: +967785502919"
@@ -557,7 +564,144 @@ fun TeacherLoginForm(
                     Text("تسجيل الدخول", fontWeight = FontWeight.Bold, fontSize = 16.sp)
                 }
             }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            OutlinedButton(
+                onClick = {
+                    activationIdentifierInput = identifier
+                    activationMessage = null
+                    showActivationDialog = true
+                },
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(46.dp)
+                    .testTag("open_activation_code_dialog")
+            ) {
+                Icon(Icons.Default.VpnKey, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("معي كود تفعيل من المالك", fontSize = 14.sp)
+            }
         }
+    }
+
+    if (showActivationDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                if (!isActivating) showActivationDialog = false
+            },
+            icon = {
+                Icon(
+                    Icons.Default.VerifiedUser,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(36.dp)
+                )
+            },
+            title = {
+                Text(
+                    "تفعيل الحساب بكود الأمان",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    textAlign = TextAlign.Center
+                )
+            },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        "أدخل البريد أو رقم الهاتف المسجل به، وكود التفعيل الممنوح لك من مالك النظام (مثال: RQ-8492-X):",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    OutlinedTextField(
+                        value = activationIdentifierInput,
+                        onValueChange = {
+                            activationIdentifierInput = it
+                            activationMessage = null
+                        },
+                        label = { Text("البريد الإلكتروني أو رقم الهاتف") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("activation_identifier_input")
+                    )
+
+                    OutlinedTextField(
+                        value = activationCodeInput,
+                        onValueChange = {
+                            activationCodeInput = it.uppercase()
+                            activationMessage = null
+                        },
+                        label = { Text("كود التفعيل (مثال: RQ-8492-X)") },
+                        placeholder = { Text("RQ-XXXX-X") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("activation_code_input")
+                    )
+
+                    if (activationMessage != null) {
+                        Text(
+                            text = activationMessage!!,
+                            color = if (activationMessage!!.contains("نجاح")) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (activationIdentifierInput.isBlank() || activationCodeInput.isBlank()) {
+                            activationMessage = "يرجى ملء الحقول المطلوبة"
+                            return@Button
+                        }
+                        isActivating = true
+                        activationMessage = null
+                        coroutineScope.launch {
+                            val result = repository.activateWithCode(
+                                activationIdentifierInput.trim(),
+                                activationCodeInput.trim()
+                            )
+                            isActivating = false
+                            if (result.first) {
+                                activationMessage = result.second
+                                kotlinx.coroutines.delay(1000)
+                                showActivationDialog = false
+                                val activatedTeacher = repository.getTeacherByLogin(activationIdentifierInput.trim())
+                                if (activatedTeacher != null) {
+                                    onSuccess(activatedTeacher)
+                                }
+                            } else {
+                                activationMessage = result.second
+                            }
+                        }
+                    },
+                    enabled = !isActivating,
+                    modifier = Modifier.testTag("submit_activation_code_button")
+                ) {
+                    if (isActivating) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Text("تفعيل الآن")
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showActivationDialog = false },
+                    enabled = !isActivating
+                ) {
+                    Text("إلغاء")
+                }
+            }
+        )
     }
 
     if (showForgotPasswordDialog) {
@@ -884,7 +1028,8 @@ fun TeacherRegisterForm(
                             subject = subject.trim(),
                             stage = stage,
                             gradeTaught = gradeTaught,
-                            curriculumEdition = curriculumEdition
+                            curriculumEdition = curriculumEdition,
+                            deviceModel = "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}".trim()
                         )
                         val (success, message) = repository.registerTeacher(newTeacher)
                         isLoading = false
