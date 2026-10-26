@@ -1,32 +1,35 @@
 package com.example.data.repository
 
+import com.example.data.cloud.CloudSyncService
 import com.example.data.dao.*
+import com.example.data.db.RqeebDatabase
 import com.example.data.model.*
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
 
 class RqeebRepository(
-    private val teacherDao: TeacherDao,
-    private val lessonDao: LessonDao,
-    private val examDao: ExamDao,
-    private val bookDao: BookDao,
-    private val studentDao: StudentDao,
-    private val timetableDao: TimetableDao,
-    private val homeworkDao: HomeworkDao,
-    private val termPlanDao: TermPlanDao,
-    private val appSettingDao: AppSettingDao,
-    private var cloudSyncService: com.example.data.cloud.CloudSyncService? = null
+    private val database: RqeebDatabase,
+    private val cloudSyncService: CloudSyncService? = null
 ) {
-    fun setCloudSyncService(service: com.example.data.cloud.CloudSyncService) {
-        this.cloudSyncService = service
+    private val teacherDao: TeacherDao = database.teacherDao()
+    private val lessonDao: LessonDao = database.lessonDao()
+    private val examDao: ExamDao = database.examDao()
+    private val bookDao: BookDao = database.bookDao()
+    private val studentDao: StudentDao = database.studentDao()
+    private val timetableDao: TimetableDao = database.timetableDao()
+    private val homeworkDao: HomeworkDao = database.homeworkDao()
+    private val termPlanDao: TermPlanDao = database.termPlanDao()
+    private val appSettingDao: AppSettingDao = database.appSettingDao()
+
+    // Real-time Cloud Flow for Owner Dashboard
+    fun getCloudTeachersFlow(): Flow<List<TeacherEntity>> {
+        return cloudSyncService?.getAllTeachersFlow() ?: teacherDao.getAllTeachers()
     }
 
-    // Teachers: Cloud-First with Local Room Persistence
-    val allTeachers: Flow<List<TeacherEntity>>
-        get() = cloudSyncService?.getAllTeachersFlow() ?: teacherDao.getAllTeachers()
+    // Local DB Teachers Flow
+    fun getAllTeachers(): Flow<List<TeacherEntity>> = teacherDao.getAllTeachers()
 
-    val totalTeachersCount: Flow<Int> = teacherDao.getTotalTeachersCount()
-    val totalLessonsCount: Flow<Int> = lessonDao.getTotalLessonsCount()
-    val totalExamsCount: Flow<Int> = examDao.getTotalExamsCount()
+    fun getTeachersByStatus(status: String): Flow<List<TeacherEntity>> = teacherDao.getTeachersByStatus(status)
 
     fun getTeachersCountByStatus(status: String): Flow<Int> = teacherDao.getCountByStatus(status)
 
@@ -34,7 +37,6 @@ class RqeebRepository(
 
     suspend fun getTeacherByLogin(identifier: String): TeacherEntity? {
         val clean = identifier.trim()
-        // Query cloud first for real-time status
         val cloudTeacher = cloudSyncService?.fetchTeacherStatus(clean)
         if (cloudTeacher != null) {
             val local = teacherDao.getTeacherByEmailOrPhone(clean)
@@ -74,13 +76,11 @@ class RqeebRepository(
         val isAct = autoApprove
         val teacherToSave = teacher.copy(status = status, isActivated = isAct)
 
-        // 1. Save locally in Room
         val localId = teacherDao.insertTeacher(teacherToSave)
         val withLocalId = teacherToSave.copy(id = localId)
 
-        // 2. Sync to Cloud Firestore
         var cloudAssignedId = ""
-        val cloudResult = cloudSyncService?.submitTeacherRegistration(withLocalId)
+        val cloudResult = cloudSyncService?.registerTeacherOnCloud(withLocalId)
         if (cloudResult != null && cloudResult.isSuccess) {
             cloudAssignedId = cloudResult.getOrNull().orEmpty()
             if (cloudAssignedId.isNotBlank()) {
@@ -198,7 +198,7 @@ class RqeebRepository(
     }
 
     fun getAuditLogsFlow(): Flow<List<AuditLogEntity>> {
-        return cloudSyncService?.getAuditLogsFlow() ?: kotlinx.coroutines.flow.flowOf(emptyList())
+        return cloudSyncService?.getAuditLogsFlow() ?: flowOf(emptyList())
     }
 
     suspend fun syncFromCloud(): Int {
@@ -238,168 +238,135 @@ class RqeebRepository(
 
     // Owner Settings & Auth
     suspend fun verifyOwner(password: String, emailOrUser: String = ""): Boolean {
-        // Cloud verification first
         val cloudOk = cloudSyncService?.verifyOwner(password, emailOrUser)
         if (cloudOk == true) return true
 
         val storedPassword = appSettingDao.getValue("owner_password") ?: "admin123456"
-        val storedEmail = appSettingDao.getValue("owner_email") ?: "abdulrqeebfarag2018@gmail.com"
+        val storedEmail = appSettingDao.getValue("owner_email") ?: YemeniCurriculum.OWNER_EMAIL_DEFAULT
         val cleanInputUser = emailOrUser.trim()
         val userMatches = cleanInputUser.isEmpty() ||
                 cleanInputUser.equals(storedEmail, ignoreCase = true) ||
-                cleanInputUser.equals("abdulrqeebfarag2018@gmail.com", ignoreCase = true) ||
+                cleanInputUser.equals(YemeniCurriculum.OWNER_EMAIL_DEFAULT, ignoreCase = true) ||
                 cleanInputUser.equals("admin@rqeeb.edu", ignoreCase = true) ||
                 cleanInputUser.equals("admin", ignoreCase = true) ||
                 cleanInputUser.equals("owner", ignoreCase = true)
+
         return userMatches && (password.trim() == storedPassword || password.trim() == "admin123456")
     }
 
-    suspend fun setAutoApprove(enabled: Boolean) {
-        appSettingDao.setValue(AppSettingEntity("auto_approve", enabled.toString()))
+    suspend fun setAutoApprove(autoApprove: Boolean) {
+        appSettingDao.setValue(AppSettingEntity("auto_approve", autoApprove.toString()))
     }
 
-    suspend fun isAutoApproveEnabled(): Boolean {
-        return (appSettingDao.getValue("auto_approve") ?: "true") == "true"
+    suspend fun isAutoApprove(): Boolean {
+        return appSettingDao.getValue("auto_approve") == "true"
     }
 
-    suspend fun updateOwnerPassword(newPass: String) {
-        appSettingDao.setValue(AppSettingEntity("owner_password", newPass.trim()))
+    suspend fun setOwnerCredentials(password: String, email: String, phone: String, whatsappUrl: String) {
+        if (password.isNotBlank()) appSettingDao.setValue(AppSettingEntity("owner_password", password))
+        if (email.isNotBlank()) appSettingDao.setValue(AppSettingEntity("owner_email", email))
+        if (phone.isNotBlank()) appSettingDao.setValue(AppSettingEntity("owner_phone", phone))
+        if (whatsappUrl.isNotBlank()) appSettingDao.setValue(AppSettingEntity("owner_whatsapp_url", whatsappUrl))
     }
 
-    suspend fun getOwnerPhone(): String {
-        return appSettingDao.getValue("owner_phone") ?: YemeniCurriculum.OWNER_PHONE_DEFAULT
+    suspend fun getOwnerSetting(key: String, default: String): String {
+        return appSettingDao.getValue(key) ?: default
     }
 
-    suspend fun getOwnerWhatsAppUrl(): String {
-        return appSettingDao.getValue("owner_whatsapp_url") ?: YemeniCurriculum.OWNER_WHATSAPP_URL_DEFAULT
+    fun getSupabaseService(): CloudSyncService? = cloudSyncService
+
+    suspend fun testSupabaseConnection(): Pair<Boolean, String> {
+        return cloudSyncService?.testConnection() ?: Pair(false, "خدمة السحابة غير مفعلة")
     }
 
-    suspend fun updateOwnerContactInfo(phone: String, whatsappUrl: String) {
-        appSettingDao.setValue(AppSettingEntity("owner_phone", phone.trim()))
-        appSettingDao.setValue(AppSettingEntity("owner_whatsapp_url", whatsappUrl.trim()))
+    fun saveSupabaseConfig(url: String, anonKey: String) {
+        cloudSyncService?.saveSupabaseConfig(url, anonKey)
     }
 
-    // AI Configuration and Usage (Google Gemini & Yemeni Curriculum)
-    suspend fun getAiApiKey(): String {
-        return appSettingDao.getValue("ai_api_key") ?: ""
+    fun getSupabaseConfig(): Pair<String, String> {
+        return Pair(cloudSyncService?.getSupabaseUrl().orEmpty(), cloudSyncService?.getSupabaseAnonKey().orEmpty())
     }
 
-    suspend fun setAiApiKey(key: String) {
-        appSettingDao.setValue(AppSettingEntity("ai_api_key", key.trim()))
-    }
-
-    suspend fun getAiProvider(): String {
-        return appSettingDao.getValue("ai_provider") ?: "Google Gemini"
-    }
-
-    suspend fun setAiProvider(provider: String) {
-        appSettingDao.setValue(AppSettingEntity("ai_provider", provider.trim()))
-    }
-
-    suspend fun getAiModelName(): String {
-        return appSettingDao.getValue("ai_model_name") ?: "gemini-2.5-flash"
-    }
-
-    suspend fun setAiModelName(model: String) {
-        appSettingDao.setValue(AppSettingEntity("ai_model_name", model.trim()))
-    }
-
-    suspend fun getAiMaxTokens(): Int {
-        return (appSettingDao.getValue("ai_max_tokens") ?: "4096").toIntOrNull() ?: 4096
-    }
-
-    suspend fun setAiMaxTokens(tokens: Int) {
-        appSettingDao.setValue(AppSettingEntity("ai_max_tokens", tokens.toString()))
-    }
-
-    suspend fun getAiDailyLimit(): Int {
-        return (appSettingDao.getValue("ai_daily_limit") ?: "100").toIntOrNull() ?: 100
-    }
-
-    suspend fun setAiDailyLimit(limit: Int) {
-        appSettingDao.setValue(AppSettingEntity("ai_daily_limit", limit.toString()))
-    }
-
-    suspend fun recordAiRequest(isSuccess: Boolean) {
-        val total = (appSettingDao.getValue("ai_total_requests") ?: "0").toIntOrNull() ?: 0
-        appSettingDao.setValue(AppSettingEntity("ai_total_requests", (total + 1).toString()))
-
-        if (isSuccess) {
-            val success = (appSettingDao.getValue("ai_success_requests") ?: "0").toIntOrNull() ?: 0
-            appSettingDao.setValue(AppSettingEntity("ai_success_requests", (success + 1).toString()))
-        } else {
-            val errors = (appSettingDao.getValue("ai_error_requests") ?: "0").toIntOrNull() ?: 0
-            appSettingDao.setValue(AppSettingEntity("ai_error_requests", (errors + 1).toString()))
-        }
-    }
-
-    suspend fun getAiUsageStats(): Triple<Int, Int, Int> {
-        val total = (appSettingDao.getValue("ai_total_requests") ?: "0").toIntOrNull() ?: 0
-        val success = (appSettingDao.getValue("ai_success_requests") ?: "0").toIntOrNull() ?: 0
-        val errors = (appSettingDao.getValue("ai_error_requests") ?: "0").toIntOrNull() ?: 0
-        return Triple(total, success, errors)
+    fun isSupabaseConfigured(): Boolean {
+        return cloudSyncService?.isConfigured() == true
     }
 
     // Lessons
-    fun getLessons(teacherId: Long): Flow<List<LessonEntity>> = lessonDao.getLessonsForTeacher(teacherId)
+    fun getLessons(teacherId: Long): Flow<List<LessonEntity>> = lessonDao.getLessonsByTeacher(teacherId)
 
     suspend fun getLessonById(id: Long): LessonEntity? = lessonDao.getLessonById(id)
 
-    suspend fun saveLesson(lesson: LessonEntity): Long = lessonDao.insertLesson(lesson)
+    suspend fun insertLesson(lesson: LessonEntity): Long = lessonDao.insertLesson(lesson)
 
-    suspend fun deleteLesson(id: Long) = lessonDao.deleteLessonById(id)
+    suspend fun updateLesson(lesson: LessonEntity) = lessonDao.updateLesson(lesson)
+
+    suspend fun deleteLesson(lesson: LessonEntity) = lessonDao.deleteLesson(lesson)
+
+    fun getLessonsCount(teacherId: Long): Flow<Int> = lessonDao.getLessonsCount(teacherId)
+
+    fun getTotalLessonsCount(): Flow<Int> = lessonDao.getTotalLessonsCount()
 
     // Exams
-    fun getExams(teacherId: Long): Flow<List<ExamEntity>> = examDao.getExamsForTeacher(teacherId)
-
-    fun getPublishedExams(): Flow<List<ExamEntity>> = examDao.getPublishedExams()
+    fun getExams(teacherId: Long): Flow<List<ExamEntity>> = examDao.getExamsByTeacher(teacherId)
 
     suspend fun getExamById(id: Long): ExamEntity? = examDao.getExamById(id)
 
-    suspend fun getExamByCode(code: String): ExamEntity? = examDao.getExamByCode(code.trim().uppercase())
-
-    suspend fun saveExam(exam: ExamEntity): Long = examDao.insertExam(exam)
+    suspend fun insertExam(exam: ExamEntity): Long = examDao.insertExam(exam)
 
     suspend fun updateExam(exam: ExamEntity) = examDao.updateExam(exam)
 
-    suspend fun deleteExam(id: Long) = examDao.deleteExamById(id)
+    suspend fun deleteExam(exam: ExamEntity) = examDao.deleteExam(exam)
+
+    fun getExamsCount(teacherId: Long): Flow<Int> = examDao.getExamsCount(teacherId)
+
+    fun getTotalExamsCount(): Flow<Int> = examDao.getTotalExamsCount()
 
     // Books
-    fun getBooks(teacherId: Long): Flow<List<BookEntity>> = bookDao.getBooksForTeacher(teacherId)
+    fun getBooks(grade: String = ""): Flow<List<BookEntity>> =
+        if (grade.isNotBlank()) bookDao.getBooksByGrade(grade) else bookDao.getAllBooks()
 
-    suspend fun saveBook(book: BookEntity): Long = bookDao.insertBook(book)
-
-    suspend fun deleteBook(id: Long) = bookDao.deleteBookById(id)
+    suspend fun insertBook(book: BookEntity) = bookDao.insertBook(book)
 
     // Students
-    fun getStudents(teacherId: Long): Flow<List<StudentEntity>> = studentDao.getStudentsForTeacher(teacherId)
+    fun getStudents(teacherId: Long): Flow<List<StudentEntity>> = studentDao.getStudentsByTeacher(teacherId)
 
-    suspend fun saveStudent(student: StudentEntity): Long = studentDao.insertStudent(student)
+    suspend fun insertStudent(student: StudentEntity) = studentDao.insertStudent(student)
 
     suspend fun updateStudent(student: StudentEntity) = studentDao.updateStudent(student)
 
-    suspend fun deleteStudent(id: Long) = studentDao.deleteStudentById(id)
+    suspend fun deleteStudent(student: StudentEntity) = studentDao.deleteStudent(student)
 
     // Timetable
-    fun getTimetable(teacherId: Long): Flow<List<TimetableSlotEntity>> = timetableDao.getTimetableForTeacher(teacherId)
+    fun getTimetable(teacherId: Long): Flow<List<TimetableSlotEntity>> = timetableDao.getTimetable(teacherId)
 
-    suspend fun saveTimetableSlot(slot: TimetableSlotEntity): Long = timetableDao.insertSlot(slot)
+    suspend fun insertTimetableSlot(slot: TimetableSlotEntity) = timetableDao.insertSlot(slot)
 
-    suspend fun deleteTimetableSlot(id: Long) = timetableDao.deleteSlotById(id)
+    suspend fun clearTimetable(teacherId: Long) = timetableDao.clearTimetable(teacherId)
 
     // Homework
-    fun getHomework(teacherId: Long): Flow<List<HomeworkEntity>> = homeworkDao.getHomeworkForTeacher(teacherId)
+    fun getHomework(teacherId: Long): Flow<List<HomeworkEntity>> = homeworkDao.getHomeworkByTeacher(teacherId)
 
-    suspend fun saveHomework(hw: HomeworkEntity): Long = homeworkDao.insertHomework(hw)
+    suspend fun insertHomework(homework: HomeworkEntity) = homeworkDao.insertHomework(homework)
 
-    suspend fun updateHomework(hw: HomeworkEntity) = homeworkDao.updateHomework(hw)
-
-    suspend fun deleteHomework(id: Long) = homeworkDao.deleteHomeworkById(id)
+    suspend fun deleteHomework(homework: HomeworkEntity) = homeworkDao.deleteHomework(homework)
 
     // Term Plans
     fun getTermPlans(teacherId: Long): Flow<List<TermPlanEntity>> = termPlanDao.getTermPlans(teacherId)
 
-    suspend fun saveTermPlan(plan: TermPlanEntity): Long = termPlanDao.insertTermPlan(plan)
+    suspend fun insertTermPlan(plan: TermPlanEntity) = termPlanDao.insertPlan(plan)
 
-    suspend fun deleteTermPlan(id: Long) = termPlanDao.deleteTermPlanById(id)
+    companion object {
+        @Volatile
+        private var INSTANCE: RqeebRepository? = null
+
+        fun getInstance(context: android.content.Context): RqeebRepository {
+            return INSTANCE ?: synchronized(this) {
+                val db = RqeebDatabase.getInstance(context)
+                val cloud = CloudSyncService.getInstance(context)
+                val instance = RqeebRepository(db, cloud)
+                INSTANCE = instance
+                instance
+            }
+        }
+    }
 }

@@ -1,0 +1,30 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="96dp"
+    android:height="96dp"
+    android:viewportWidth="96"
+    android:viewportHeight="96">
+    <!-- Outer Shield Background -->
+    <path
+        android:fillColor="#0D5C3A"
+        android:pathData="M48,6 C26,6 16,16 16,36 C16,62 38,84 48,90 C58,84 80,62 80,36 C80,16 70,6 48,6 Z" />
+    <!-- Inner Accent Shield -->
+    <path
+        android:fillColor="#15803D"
+        android:pathData="M48,12 C30,12 22,20 22,37 C22,58 40,78 48,83 C56,78 74,58 74,37 C74,20 66,12 48,12 Z" />
+    <!-- Open Book / Pages in White -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M48,46 C41,40 31,39 25,41 L25,65 C31,63 41,64 48,70 C55,64 65,63 71,65 L71,41 C65,39 55,40 48,46 Z" />
+    <!-- Book Spine Divider -->
+    <path
+        android:fillColor="#D97706"
+        android:pathData="M47,44 L49,44 L49,70 L47,70 Z" />
+    <!-- Quill / Pen Nib in Gold -->
+    <path
+        android:fillColor="#FBBF24"
+        android:pathData="M48,20 L53,32 L48,42 L43,32 Z" />
+    <!-- Star of Excellence above Book -->
+    <path
+        android:fillColor="#FDE68A"
+        android:pathData="M48,16 L49.5,19.5 L53,20 L50.5,22.5 L51,26 L48,24 L45,26 L45.5,22.5 L43,20 L46.5,19.5 Z" />
+</vector>

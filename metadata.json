@@ -1,6 +1,6 @@
 {
-  "name": "رقيب",
-  "description": "رقيب مساعد المعلم الذكي لتحضير الدروس وإعداد الاختبارات وإدارة الفصول",
+  "name": "رقيب – مساعد المعلم الذكي",
+  "description": "تطبيق رقيب لمساعدة المعلم في اليمن وفق المناهج الرسمية مع نظام مركزي لتسجيل المعلمين ولوحة تحكم المالك",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

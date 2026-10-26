@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.example.data.dao.*
 import com.example.data.model.*
@@ -41,11 +42,13 @@ abstract class RqeebDatabase : RoomDatabase() {
         @Volatile
         private var INSTANCE: RqeebDatabase? = null
 
-        val MIGRATION_3_4 = object : androidx.room.migration.Migration(3, 4) {
+        val MIGRATION_3_4 = object : Migration(3, 4) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE teachers ADD COLUMN section TEXT NOT NULL DEFAULT ''")
             }
         }
+
+        fun getInstance(context: Context): RqeebDatabase = getDatabase(context)
 
         fun getDatabase(context: Context): RqeebDatabase {
             return INSTANCE ?: synchronized(this) {
@@ -79,16 +82,13 @@ abstract class RqeebDatabase : RoomDatabase() {
                 val lessonDao = database.lessonDao()
                 val examDao = database.examDao()
                 val bookDao = database.bookDao()
-                val studentDao = database.studentDao()
-                val timetableDao = database.timetableDao()
-                val termPlanDao = database.termPlanDao()
 
                 // Default Owner settings & Official Yemeni Contact Details
-                settingDao.setValue(AppSettingEntity("owner_email", "admin@rqeeb.edu"))
+                settingDao.setValue(AppSettingEntity("owner_email", YemeniCurriculum.OWNER_EMAIL_DEFAULT))
                 settingDao.setValue(AppSettingEntity("owner_password", "admin123456"))
-                settingDao.setValue(AppSettingEntity("owner_phone", "785502919"))
-                settingDao.setValue(AppSettingEntity("owner_whatsapp_url", "https://wa.me/967785502919"))
-                settingDao.setValue(AppSettingEntity("auto_approve", "true"))
+                settingDao.setValue(AppSettingEntity("owner_phone", YemeniCurriculum.OWNER_PHONE_DEFAULT))
+                settingDao.setValue(AppSettingEntity("owner_whatsapp_url", YemeniCurriculum.OWNER_WHATSAPP_URL_DEFAULT))
+                settingDao.setValue(AppSettingEntity("auto_approve", "false"))
 
                 // Seed Default Approved Yemeni Teacher
                 val teacherId = teacherDao.insertTeacher(
@@ -142,201 +142,82 @@ abstract class RqeebDatabase : RoomDatabase() {
                         directorate = "مديرية التحرير",
                         governorate = "أمانة العاصمة",
                         term = "الفصل الدراسي الأول",
-                        unitNumber = "الوحدة الثانية: التحليل الرياضي",
-                        lessonNumber = "الدرس الثالث",
-                        bookPages = "صفحة 45 إلى 49",
-                        period = "الحصة الثانية",
-                        objectives = "1. أن يتعرف الطالب على الصورة العامة لمقدار الفرق بين مربعين (س² - ص²).\n2. أن يحلل الطالب المقادير الجبرية المعطاة إلى عاملين بدقة.\n3. أن يطبق خطوات الحل في إيجاد جذور المعادلة التربيعية بنجاح.",
-                        introduction = "التهيئة ومراجعة التعلم السابق: سؤال عصف ذهني مدخلي: إذا كان لدينا قطعة أرض مربعة طول ضلعها (س) م، واقتطعنا منها مربعاً صغيراً طول ضلعه (ص) م، فما هي المساحة المتبقية؟ وكيف نعبر عنها جبرياً؟",
-                        previousKnowledge = "مفهوم المربع الكامل، الضرب القياسي للحدوديات، والعمليات الحسابية الأساسية في مجموعة الأعداد الحقيقية (ح).",
-                        detailedExplanation = "القاعدة: س² - ص² = (س - ص)(س + ص).\nخطوات الحل:\n1. التأكد من وجود علامة الطرح بين حدين مربعين.\n2. فتح قوسين متطابقين أحدهما موجب والآخر سالب.\n3. أخذ الجذر التربيعي لكل حد ووضعه داخل القوسين.\nمثال محلول: حلل المقدار: 4س² - 9 = (2س - 3)(2س + 3).\nمثال حياتي: حساب تكلفة رصف فناء مدرسي بمبلغ 5000 ريال يمني.",
-                        teacherActivities = "الشرح على السبورة التفاعلية، توجيه الأسئلة السابرة، متابعة مجموعات التعلم التعاوني، وتقديم الدعم للطلاب ذوي التحصيل المتوسط.",
-                        studentActivities = "المشاركة في حل الأمثلة الفردية على كراس النشاط، وتبادل الكراسات مع الزميل للتصحيح الثنائي (فكر-زاوج-شارك).",
-                        strategies = "التعلم البنائي، حل المشكلات، الاستقصاء الموجه، والتطبيق الحياتي.",
-                        teachingMaterials = "الكتاب المدرسي المعتمد (طبعة المنهج اليمني)، السبورة التفاعلية، بطاقات التمارين.",
-                        formativeAssessment = "تمرين صفي سريع: حلل في ح كلاً من: (س² - 25 = 0) ومناقشة الحلول الفردية شفوياً.",
-                        finalAssessment = "تقويم ختامي من ثلاث فقرات لقياس تحقق الأهداف الثلاثة.",
-                        questionsAndAnswers = "س: ما الفرق بين س² - ص² و (س - ص)²؟\nج: س² - ص² هو فرق بين مربعين، بينما (س - ص)² هو مربع كامل لمقدار ذي حدين.",
-                        lessonSummary = "الفرق بين مربعين يتحلل دائماً إلى حاصل ضرب مجموع الحدين في الفرق بينهما، ويستخدم لحل المعادلات الجبرية من الدرجة الثانية.",
-                        homework = "حل التمارين (1، 3، 5) صفحة 50 من كتاب الرياضيات المعتمد للجمهورية اليمنية.",
-                        timeAllocation = "التهيئة والمراجعة: 5 د | الشرح ونمذجة الحلول: 20 د | النشاط الصفي الفردي والتعاوني: 12 د | التقويم الختامي والغلق: 8 د",
-                        teacherNotes = "أظهر الطلاب فهماً ممتازاً مع الحاجة إلى تأكيد عدم نسيان إشارة السالب في التحليل."
-                    )
-                )
-
-                // Seed Yemeni Curricula Books
-                bookDao.insertBook(
-                    BookEntity(
-                        teacherId = teacherId,
-                        title = "كتاب الرياضيات - الصف التاسع الأساسي (الجزء الأول)",
-                        subject = "الرياضيات",
-                        grade = "الصف التاسع الأساسي",
-                        edition = "طبعة صنعاء (وزارة التربية والتعليم - صنعاء)",
-                        unit = "الوحدة الأولى والثانية",
-                        lesson = "المجموعات والعلاقات والتحليل",
-                        pages = "1 - 120",
-                        description = "المنهج الرسمي المعتمد لمادة الرياضيات للصف التاسع الأساسي في مدارس الجمهورية اليمنية.",
-                        extractedText = "الوحدة الأولى: المجموعات والعلاقات والتطبيقات. الوحدة الثانية: المقادير الجبرية وتحليلها، تشمل الفرق بين مربعين، مجموع مكعبين والفرق بينهما، المقدار الثلاثي البسيط وغير البسيط، والمعادلات الكسرية وتطبيقاتها."
-                    )
-                )
-
-                bookDao.insertBook(
-                    BookEntity(
-                        teacherId = teacherId,
-                        title = "كتاب العلوم - الصف الثامن الأساسي (الجزء الأول)",
-                        subject = "العلوم العامة",
-                        grade = "الصف الثامن الأساسي",
-                        edition = "طبعة عدن (وزارة التربية والتعليم - عدن)",
-                        unit = "الوحدة الأولى: المادة والطاقة",
-                        lesson = "تركيب الذرة والعناصر الكيميائية",
-                        pages = "1 - 95",
-                        description = "كتاب العلوم لمدارس التعليم الأساسي وفق الطبعة المعتمدة في اليمن.",
-                        extractedText = "تتناول الوحدة الأولى تركيب المادة والذرة والجسيمات دون الذرية (البروتونات والنيوترونات والإلكترونات)، مع تجارب استقصائية توضح التفاعلات الكيميائية ومصادر الطاقة المتجددة في البيئة اليمنية كالرياح والطاقة الشمسية."
-                    )
-                )
-
-                bookDao.insertBook(
-                    BookEntity(
-                        teacherId = teacherId,
-                        title = "كتاب الفيزياء - الصف الثالث الثانوي (القسم العلمي)",
-                        subject = "الفيزياء",
-                        grade = "الصف الثالث الثانوي (علمي)",
-                        edition = "طبعة صنعاء (وزارة التربية والتعليم - صنعاء)",
-                        unit = "الوحدة الأولى والثانية",
-                        lesson = "الحركة الدائرية والجاذبية الأرضية والكهرباء الساكنة",
-                        pages = "1 - 180",
-                        description = "منهج الفيزياء لشهادة الثانوية العامة بالجمهورية اليمنية.",
-                        extractedText = "الحركة الدائرية المنتظمة، العجلة المركزية، القوة الجاذبة المركزية، قانون الجذب العام لنيوتن، الأقمار الصناعية وحساب سرعتها المدارية وزمنها الدوري."
+                        unitName = "الوحدة الأولى: التحليل الرياضي",
+                        lessonDate = "1446/04/15هـ",
+                        periodNumber = "الحصة الثالثة",
+                        periodsCount = 1,
+                        studentLevel = "متوسط / اعتيادي",
+                        preparationType = "تحضير يومي قياسي",
+                        cognitiveObjectives = "1. أن يتعرف الطالب على الصورة العامة للفرق بين مربعين أ² - ب².\n2. أن يستنتج الطالب قاعدة التحليل (أ - ب)(أ + ب).\n3. أن يحل الطالب معادلات تربيعية بسيطة بدقة.",
+                        skillObjectives = "1. تمييز الحدود التي تمثل مربعاً كاملاً.\n2. تطبيق خطوات التحليل بالترتيب الصحيح.\n3. التحقق من صحة الحل بالضرب العكسي.",
+                        affectiveObjectives = "1. تقدير أهمية الرياضيات في حل المشكلات الحياتية.\n2. المشاركة الإيجابية في الأنشطة الصفية والتعاون مع الزملاء.",
+                        introduction = "مراجعة مفهوم المربع الكامل ومساحة المربع (طول الضلع في نفسه)، ثم طرح مسألة استكشافية: إذا كانت س² = 25 فما قيم س الممكنة؟",
+                        teachingSteps = "الخطوة 1: عرض أمثلة توضيحية على السبورة.\nالخطوة 2: استنتاج القاعدة الرياضية وتدوينها.\nالخطوة 3: حل تدريب فردي بمتابعة المعلم.\nالخطوة 4: نشاط تعاوني بين المجموعات لحل مسائل متقدمة.",
+                        formativeAssessment = "سؤال سريع للتقويم التكويني: حلل المقدار: 4س² - 49.",
+                        homework = "تمارين الكتاب المدرسي صفحة 45، المسائل رقم (1، 3، 5).",
+                        teacherNotes = "لوحظ تفاعل ممتاز وتفوق ملحوظ في شعبة (أ).",
+                        teacherStyles = "الحوار والمناقشة، التعزيز الإيجابي",
+                        teachingMethods = "العصف الذهني، التعلم التعاوني",
+                        skillsAndValues = "التفكير الناقد والتحليل، التعاون",
+                        teachingAids = "السبورة الملونة، الكتاب المدرسي",
+                        textbookReference = "كتاب الرياضيات - الصف التاسع الأساسي - ص 42-45",
+                        curriculumEdition = "طبعة صنعاء (وزارة التربية والتعليم - صنعاء)"
                     )
                 )
 
                 // Seed Yemeni Exam
-                val yemeniQuestions = listOf(
-                    ExamQuestion(
-                        questionText = "حلل المقدار الجبري الآتي تحليلاً كاملاً في ح: (س² - 49)",
-                        type = QuestionType.MULTIPLE_CHOICE,
-                        options = listOf(
-                            "(س - 7)(س + 7)",
-                            "(س - 7)(س - 7)",
-                            "(س + 7)(س + 7)",
-                            "لا يمكن تحليله"
-                        ),
-                        correctAnswer = "(س - 7)(س + 7)",
-                        explanation = "الفرق بين مربعين هو حاصل ضرب مجموع الجذرين في الفرق بينهما.",
-                        marks = 5
-                    ),
-                    ExamQuestion(
-                        questionText = "مجموع مكعبي حدين (س³ + ص³) يساوي: (س + ص)(س² - س ص + ص²).",
-                        type = QuestionType.TRUE_FALSE,
-                        options = listOf("صح", "خطأ"),
-                        correctAnswer = "صح",
-                        explanation = "صحيح، وفق قاعدة تحليل مجموع مكعبين المعتمدة في منهج الصف التاسع.",
-                        marks = 5
-                    ),
-                    ExamQuestion(
-                        questionText = "اشترى تاجر في مدينة صنعاء بضاعة بمبلغ 80,000 ريال يمني وباعها بمبلغ 96,000 ريال يمني. ما مقدار النسبة المئوية للربح؟",
-                        type = QuestionType.FILL_BLANKS,
-                        options = emptyList(),
-                        correctAnswer = "20%",
-                        explanation = "مقدار الربح = 16,000 ريال. النسبة = (16000 / 80000) * 100 = 20%.",
-                        marks = 5
-                    ),
-                    ExamQuestion(
-                        questionText = "علل: يعتبر المقدار (س² + 9) أولياً في مجموعة الأعداد الحقيقية (ح).",
-                        type = QuestionType.SHORT_ANSWER,
-                        options = emptyList(),
-                        correctAnswer = "لأنه مجموع مربعين ولا توجد أعداد حقيقية يكون مربعها سالباً.",
-                        explanation = "مجموع المربعين لا يتحلل في مجموعة الأعداد الحقيقية.",
-                        marks = 5
-                    )
-                )
-
                 examDao.insertExam(
                     ExamEntity(
                         teacherId = teacherId,
-                        title = "اختبار منتصف الفصل الأول في الرياضيات - الصف التاسع",
+                        title = "اختبار منتصف الفصل الدراسي الأول في الرياضيات",
                         subject = "الرياضيات",
-                        grade = "الصف التاسع الأساسي",
-                        difficulty = "متوسط",
+                        grade = "9/ إعدادي",
+                        examType = "اختبار شهري",
                         durationMinutes = 45,
-                        totalMarks = 20,
-                        examCode = "YE-901",
-                        questionsJson = ExamQuestion.listToJsonString(yemeniQuestions),
-                        instructions = "الجمهورية اليمنية - وزارة التربية والتعليم\nأجب عن الأسئلة بدقة ووضوح مع مراعاة الوقت المحدد.",
-                        isPublishedToStudents = true
+                        totalScore = 20,
+                        schoolName = "مدرسة جمال عبد الناصر للمتفوقين",
+                        term = "الفصل الدراسي الأول",
+                        academicYear = "1446-1447هـ",
+                        questionsJson = "[]"
                     )
                 )
 
-                // Seed Term Plan (الخطة الفصلية)
-                val sampleTermPlans = listOf(
-                    TermPlanEntity(
-                        teacherId = teacherId,
+                // Seed Official Yemeni Books
+                val sampleBooks = listOf(
+                    BookEntity(
+                        title = "الرياضيات - الجزء الأول",
                         subject = "الرياضيات",
-                        grade = "الصف التاسع الأساسي",
-                        term = "الفصل الدراسي الأول",
-                        weekNumber = 1,
-                        unitTitle = "الوحدة الأولى: المجموعات والعلاقات",
-                        lessonTitle = "مفهوم المجموعة والعمليات عليها (الاتحاد والتقاطع)",
-                        objectives = "تمثيل المجموعات بأشكال فن وحل المسائل عليها",
-                        assessmentPlan = "واجب منزلي ص 12 + بطاقة خروج سريعة"
+                        grade = "9/ إعدادي",
+                        edition = "طبعة صنعاء",
+                        summary = "منهج وزارة التربية والتعليم - يتضمن وحدات التحليل، المعادلات، والمجموعات",
+                        unitsCount = 5
                     ),
-                    TermPlanEntity(
-                        teacherId = teacherId,
-                        subject = "الرياضيات",
-                        grade = "الصف التاسع الأساسي",
-                        term = "الفصل الدراسي الأول",
-                        weekNumber = 2,
-                        unitTitle = "الوحدة الأولى: المجموعات والعلاقات",
-                        lessonTitle = "العلاقة والتطبيق وأنواعه (الشامل والمتباين والتقابل)",
-                        objectives = "تمييز أنواع التطبيقات وإيجاد مداها ومجالها",
-                        assessmentPlan = "اختبار قصير في الحصة 10 درجات"
+                    BookEntity(
+                        title = "اللغة العربية (المطالعة والنصوص)",
+                        subject = "اللغة العربية",
+                        grade = "9/ إعدادي",
+                        edition = "طبعة صنعاء",
+                        summary = "مختارات أدبية وقواعد لغوية وبلاغة",
+                        unitsCount = 6
                     ),
-                    TermPlanEntity(
-                        teacherId = teacherId,
-                        subject = "الرياضيات",
-                        grade = "الصف التاسع الأساسي",
-                        term = "الفصل الدراسي الأول",
-                        weekNumber = 3,
-                        unitTitle = "الوحدة الثانية: المقادير الجبرية",
-                        lessonTitle = "تحليل المقدار الجبري بإخراج العامل المشترك الأكبر",
-                        objectives = "استخراج ع.م.أ وتطبيقه على حدوديات جبرية متنوعة",
-                        assessmentPlan = "نشاط صفي تعاوني وحل تمارين الكتاب"
+                    BookEntity(
+                        title = "العلوم والحياة",
+                        subject = "العلوم",
+                        grade = "9/ إعدادي",
+                        edition = "طبعة صنعاء",
+                        summary = "الفيزياء والكيمياء والأحياء الأساسية لطلاب المرحلة الإعدادية",
+                        unitsCount = 6
                     ),
-                    TermPlanEntity(
-                        teacherId = teacherId,
-                        subject = "الرياضيات",
-                        grade = "الصف التاسع الأساسي",
-                        term = "الفصل الدراسي الأول",
-                        weekNumber = 4,
-                        unitTitle = "الوحدة الثانية: المقادير الجبرية",
-                        lessonTitle = "الفرق بين مربعين وحل المعادلات التربيعية",
-                        objectives = "تحليل س² - ص² وتطبيق الحل الجبري",
-                        assessmentPlan = "اختبار شهري أول + تقييم الأداء الصفي"
+                    BookEntity(
+                        title = "القرآن الكريم وعلومه",
+                        subject = "القرآن الكريم",
+                        grade = "9/ إعدادي",
+                        edition = "المنهج العام الموحد",
+                        summary = "السور المقررة حفظاً وتلاوة وأحكام التجويد",
+                        unitsCount = 4
                     )
                 )
-                sampleTermPlans.forEach { termPlanDao.insertTermPlan(it) }
-
-                // Seed Students
-                val sampleStudents = listOf(
-                    StudentEntity(teacherId = teacherId, className = "9/1", studentName = "محمد عبد الله الحاشدي", attendanceStatus = StudentEntity.ATTENDANCE_PRESENT, quizScore = 9.5, homeworkScore = 10.0, examScore = 19.5),
-                    StudentEntity(teacherId = teacherId, className = "9/1", studentName = "أسامة علي الصنعاني", attendanceStatus = StudentEntity.ATTENDANCE_PRESENT, quizScore = 8.5, homeworkScore = 9.0, examScore = 18.0),
-                    StudentEntity(teacherId = teacherId, className = "9/1", studentName = "إبراهيم وليد الهمداني", attendanceStatus = StudentEntity.ATTENDANCE_PRESENT, quizScore = 9.0, homeworkScore = 9.5, examScore = 19.0),
-                    StudentEntity(teacherId = teacherId, className = "9/1", studentName = "حمزة صالح الحضرمي", attendanceStatus = StudentEntity.ATTENDANCE_LATE, quizScore = 7.5, homeworkScore = 8.0, examScore = 16.0),
-                    StudentEntity(teacherId = teacherId, className = "9/2", studentName = "يحيى قاسم التعزي", attendanceStatus = StudentEntity.ATTENDANCE_PRESENT, quizScore = 10.0, homeworkScore = 10.0, examScore = 20.0),
-                    StudentEntity(teacherId = teacherId, className = "9/2", studentName = "بلال سالم العدني", attendanceStatus = StudentEntity.ATTENDANCE_ABSENT, quizScore = 6.5, homeworkScore = 7.0, examScore = 14.5)
-                )
-                sampleStudents.forEach { studentDao.insertStudent(it) }
-
-                // Seed Timetable
-                val slots = listOf(
-                    TimetableSlotEntity(teacherId = teacherId, dayOfWeek = 0, periodNumber = 1, subject = "الرياضيات", className = "9/1", room = "شعبة 1"),
-                    TimetableSlotEntity(teacherId = teacherId, dayOfWeek = 0, periodNumber = 2, subject = "الرياضيات", className = "9/2", room = "شعبة 2"),
-                    TimetableSlotEntity(teacherId = teacherId, dayOfWeek = 1, periodNumber = 1, subject = "الرياضيات", className = "9/1", room = "شعبة 1"),
-                    TimetableSlotEntity(teacherId = teacherId, dayOfWeek = 2, periodNumber = 3, subject = "نشاط علمي وتطبيقي", className = "9/1", room = "معمل العلوم"),
-                    TimetableSlotEntity(teacherId = teacherId, dayOfWeek = 3, periodNumber = 2, subject = "الرياضيات", className = "9/2", room = "شعبة 2"),
-                    TimetableSlotEntity(teacherId = teacherId, dayOfWeek = 4, periodNumber = 1, subject = "الرياضيات", className = "9/1", room = "شعبة 1")
-                )
-                slots.forEach { timetableDao.insertSlot(it) }
+                bookDao.insertBooks(sampleBooks)
             }
         }
     }

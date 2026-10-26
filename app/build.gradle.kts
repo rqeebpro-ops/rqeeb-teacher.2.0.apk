@@ -13,7 +13,7 @@ android {
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
   defaultConfig {
-    applicationId = "com.aistudio.rqeebteacher.wzfltr"
+    applicationId = "com.aistudio.rqeebteacher.yemen"
     minSdk = 24
     targetSdk = 36
     versionCode = 1
@@ -105,16 +105,16 @@ dependencies {
   // implementation(libs.androidx.navigation.compose)
   implementation(libs.androidx.room.ktx)
   implementation(libs.androidx.room.runtime)
-  // implementation(libs.coil.compose)
+  implementation(libs.coil.compose)
   implementation(libs.converter.moshi)
   implementation(libs.firebase.ai)
-  implementation(libs.firebase.firestore)
-  implementation(libs.firebase.auth)
-  implementation(libs.androidx.credentials)
-  implementation(libs.androidx.credentials.play.services)
-  implementation(libs.googleid)
-  implementation(libs.firebase.appcheck.recaptcha)
-  implementation(libs.firebase.appcheck.debug)
+  // implementation(libs.firebase.firestore)
+  // implementation(libs.firebase.auth)
+  // implementation(libs.androidx.credentials)
+  // implementation(libs.androidx.credentials.play.services)
+  // implementation(libs.googleid)
+  // implementation(libs.firebase.appcheck.recaptcha)
+  // implementation(libs.firebase.appcheck.debug)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
   implementation(libs.logging.interceptor)

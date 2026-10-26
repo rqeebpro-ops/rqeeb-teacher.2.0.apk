@@ -19,7 +19,7 @@ data class TeacherEntity(
     val directorate: String = "", // المديرية التعليمية في اليمن
     val subject: String,
     val stage: String, // مرحلة التعليم الأساسي / مرحلة التعليم الثانوي
-    val gradeTaught: String = "", // الصف الذي يدرسه
+    val gradeTaught: String = "", // الصف الذي يدرسه (مثل 9/ إعدادي)
     val section: String = "", // الشعبة الدراسية (أ، ب، ج، ...) أو مخصصة
     val curriculumEdition: String = "طبعة صنعاء (وزارة التربية والتعليم - صنعاء)", // طبعة صنعاء / طبعة عدن
     val academicYear: String = "1446-1447هـ / 2024-2025م",
@@ -68,30 +68,31 @@ data class LessonEntity(
     val directorate: String = "",
     val governorate: String = "",
     val term: String = "الفصل الدراسي الأول",
-    val unitNumber: String = "",
-    val lessonNumber: String = "",
-    val bookPages: String = "",
-    val period: String = "الحصة الأولى",
-    val objectives: String,
-    val introduction: String,
-    val previousKnowledge: String = "",
-    val detailedExplanation: String,
-    val teacherActivities: String,
-    val studentActivities: String,
-    val strategies: String,
-    val teachingMaterials: String = "",
-    val formativeAssessment: String,
-    val finalAssessment: String = "",
-    val questionsAndAnswers: String = "",
-    val lessonSummary: String,
-    val homework: String,
-    val timeAllocation: String = "",
+    val unitName: String = "",
+    val lessonDate: String = "",
+    val periodNumber: String = "الحصة الأولى",
+    val periodsCount: Int = 1,
+    val studentLevel: String = "متوسط / اعتيادي",
+    val preparationType: String = "تحضير يومي قياسي",
+    val cognitiveObjectives: String = "",
+    val skillObjectives: String = "",
+    val affectiveObjectives: String = "",
+    val introduction: String = "",
+    val teachingSteps: String = "",
+    val formativeAssessment: String = "",
+    val homework: String = "",
     val teacherNotes: String = "",
+    val teacherStyles: String = "",
+    val teachingMethods: String = "",
+    val skillsAndValues: String = "",
+    val teachingAids: String = "",
+    val textbookReference: String = "",
+    val curriculumEdition: String = "",
     val createdAt: Long = System.currentTimeMillis()
 )
 
 /**
- * Generated or Manually Edited Exam Entity
+ * Exam Entity generated according to Yemeni Ministry formats
  */
 @Entity(tableName = "exams")
 data class ExamEntity(
@@ -101,38 +102,102 @@ data class ExamEntity(
     val title: String,
     val subject: String,
     val grade: String,
-    val difficulty: String = "متوسط", // سهل, متوسط, متقدم
+    val examType: String = "اختبار شهري",
     val durationMinutes: Int = 45,
-    val totalMarks: Int = 20,
-    val examCode: String = "",
-    val questionsJson: String, // JSON representation of questions
-    val instructions: String = "",
-    val isPublishedToStudents: Boolean = false,
+    val totalScore: Int = 20,
+    val questionsJson: String = "",
+    val schoolName: String = "",
+    val term: String = "الفصل الدراسي الأول",
+    val academicYear: String = "1446-1447هـ",
     val createdAt: Long = System.currentTimeMillis()
 )
 
+enum class QuestionType {
+    MULTIPLE_CHOICE, TRUE_FALSE, ESSAY, FILL_BLANKS, MATCHING
+}
+
+data class ExamQuestion(
+    val id: Int,
+    val type: QuestionType,
+    val text: String,
+    val options: List<String> = emptyList(),
+    val correctAnswer: String = "",
+    val score: Int = 1,
+    val explanation: String = "",
+    val diagramId: String? = null
+)
+
 /**
- * Educational Library Book/Curriculum Entity (Yemeni textbooks)
+ * Textbook reference in Yemeni Educational Library
  */
 @Entity(tableName = "books")
 data class BookEntity(
+    @PrimaryKey(autoGenerate = true)
+    val id: Long = 0,
+    val title: String,
+    val subject: String,
+    val grade: String,
+    val edition: String,
+    val summary: String = "",
+    val unitsCount: Int = 6,
+    val pdfAssetPath: String = ""
+)
+
+/**
+ * Student in Yemeni teacher's record
+ */
+@Entity(tableName = "students")
+data class StudentEntity(
+    @PrimaryKey(autoGenerate = true)
+    val id: Long = 0,
+    val teacherId: Long,
+    val fullName: String,
+    val seatNumber: String = "",
+    val grade: String,
+    val section: String = "أ",
+    val monthlyTestScore: Double = 0.0,
+    val homeworkScore: Double = 0.0,
+    val activityScore: Double = 0.0,
+    val examScore: Double = 0.0,
+    val notes: String = ""
+)
+
+/**
+ * Timetable Slot
+ */
+@Entity(tableName = "timetable")
+data class TimetableSlotEntity(
+    @PrimaryKey(autoGenerate = true)
+    val id: Long = 0,
+    val teacherId: Long,
+    val dayOfWeek: String, // الأحد، الإثنين، ...
+    val periodIndex: Int, // 1 to 7
+    val subject: String,
+    val grade: String,
+    val section: String = "أ"
+)
+
+/**
+ * Daily Homework assigned
+ */
+@Entity(tableName = "homework")
+data class HomeworkEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
     val teacherId: Long,
     val title: String,
     val subject: String,
     val grade: String,
-    val edition: String = "طبعة صنعاء", // طبعة صنعاء / طبعة عدن
-    val unit: String = "",
-    val lesson: String = "",
-    val pages: String = "",
+    val section: String = "",
     val description: String,
-    val extractedText: String,
+    val dueDate: String,
+    val textbookPage: String = "",
+    val exerciseNumbers: String = "",
     val createdAt: Long = System.currentTimeMillis()
 )
 
 /**
- * Term Plan Entity (الخطة الفصلية وتوزيع المنهج على أسابيع الفصل الدراسي)
+ * Annual / Term Distribution Plan
  */
 @Entity(tableName = "term_plans")
 data class TermPlanEntity(
@@ -143,76 +208,13 @@ data class TermPlanEntity(
     val grade: String,
     val term: String,
     val weekNumber: Int,
-    val unitTitle: String,
-    val lessonTitle: String,
-    val objectives: String,
-    val assessmentPlan: String
+    val topicTitle: String,
+    val lessonsCount: Int = 4,
+    val executionNotes: String = ""
 )
 
 /**
- * Student Entity for Attendance and Grades
- */
-@Entity(tableName = "students")
-data class StudentEntity(
-    @PrimaryKey(autoGenerate = true)
-    val id: Long = 0,
-    val teacherId: Long,
-    val className: String,
-    val studentName: String,
-    val attendanceStatus: String = ATTENDANCE_PRESENT, // PRESENT, ABSENT, LATE
-    val quizScore: Double = 0.0,
-    val homeworkScore: Double = 0.0,
-    val examScore: Double = 0.0,
-    val maxQuizScore: Double = 10.0,
-    val maxHomeworkScore: Double = 10.0,
-    val maxExamScore: Double = 20.0,
-    val notes: String = ""
-) {
-    companion object {
-        const val ATTENDANCE_PRESENT = "PRESENT"
-        const val ATTENDANCE_ABSENT = "ABSENT"
-        const val ATTENDANCE_LATE = "LATE"
-    }
-
-    val totalScore: Double get() = quizScore + homeworkScore + examScore
-    val totalMaxScore: Double get() = maxQuizScore + maxHomeworkScore + maxExamScore
-    val percentage: Int get() = if (totalMaxScore > 0) ((totalScore / totalMaxScore) * 100).toInt() else 0
-}
-
-/**
- * Weekly Timetable Slot
- */
-@Entity(tableName = "timetable")
-data class TimetableSlotEntity(
-    @PrimaryKey(autoGenerate = true)
-    val id: Long = 0,
-    val teacherId: Long,
-    val dayOfWeek: Int, // 0: الأحد, 1: الاثنين, 2: الثلاثاء, 3: الأربعاء, 4: الخميس
-    val periodNumber: Int, // 1 to 7
-    val subject: String,
-    val className: String,
-    val room: String = ""
-)
-
-/**
- * Homework Assignment
- */
-@Entity(tableName = "homework")
-data class HomeworkEntity(
-    @PrimaryKey(autoGenerate = true)
-    val id: Long = 0,
-    val teacherId: Long,
-    val className: String,
-    val title: String,
-    val description: String,
-    val dueDate: String,
-    val totalMarks: Int = 10,
-    val isCompleted: Boolean = false,
-    val createdAt: Long = System.currentTimeMillis()
-)
-
-/**
- * Application Settings Key-Value Store
+ * App Settings & Owner configuration
  */
 @Entity(tableName = "app_settings")
 data class AppSettingEntity(

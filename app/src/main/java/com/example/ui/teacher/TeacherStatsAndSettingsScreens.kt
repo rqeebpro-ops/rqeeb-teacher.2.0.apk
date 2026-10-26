@@ -13,7 +13,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -47,83 +46,53 @@ fun TeacherStatsScreen(
     val students by repository.getStudents(teacher.id).collectAsState(initial = emptyList())
     val homeworks by repository.getHomework(teacher.id).collectAsState(initial = emptyList())
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("تقارير وإحصائيات المعلم") },
-                navigationIcon = {
-                    IconButton(onClick = onBack, modifier = Modifier.testTag("stats_back_button")) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "رجوع")
-                    }
-                }
-            )
-        },
-        modifier = modifier
-    ) { innerPadding ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
-            item {
-                Card(
-                    shape = RoundedCornerShape(14.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            "مؤشرات الأداء التربوي والإنتاجية",
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Text(
-                            "ملخص ما تم إنجازه عبر منصة رقيب خلال الفصل الدراسي",
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-
-            item {
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    StatCard("الدروس المحضرة", "${lessons.size}", Icons.Default.MenuBook, MaterialTheme.colorScheme.primary, Modifier.weight(1f))
-                    StatCard("نماذج الاختبارات", "${exams.size}", Icons.Default.Quiz, MaterialTheme.colorScheme.secondary, Modifier.weight(1f))
-                }
-            }
-
-            item {
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    StatCard("الطلاب المسجلون", "${students.size}", Icons.Default.People, StatusApproved, Modifier.weight(1f))
-                    StatCard("الواجبات المسندة", "${homeworks.size}", Icons.Default.Assignment, Color(0xFFD97706), Modifier.weight(1f))
-                }
-            }
-
-            item {
-                Card(
-                    shape = RoundedCornerShape(14.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("مستويات حضور الطلاب العامة", fontWeight = FontWeight.Bold)
-                        val presentCount = students.count { it.attendanceStatus == "PRESENT" }
-                        val lateCount = students.count { it.attendanceStatus == "LATE" }
-                        val absentCount = students.count { it.attendanceStatus == "ABSENT" }
-                        val total = students.size.coerceAtLeast(1)
-
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("نسبة الحضور الإجمالية:", fontSize = 12.sp)
-                            Text("${(presentCount * 100) / total}%", fontWeight = FontWeight.Bold, color = StatusApproved, fontSize = 12.sp)
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text("إحصائيات وتقارير المعلم") },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "رجوع")
                         }
-                        LinearProgressIndicator(
-                            progress = { presentCount.toFloat() / total.toFloat() },
-                            color = StatusApproved,
-                            modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp))
-                        )
+                    }
+                )
+            },
+            modifier = modifier
+        ) { innerPadding ->
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                item {
+                    Text(
+                        "ملخص الإنجاز التعليمي",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        StatMetricCard("الدروس المحضرة", "${lessons.size}", Icons.Default.Description, MaterialTheme.colorScheme.primary, Modifier.weight(1f))
+                        StatMetricCard("الاختبارات المنشأة", "${exams.size}", Icons.Default.Quiz, MaterialTheme.colorScheme.secondary, Modifier.weight(1f))
+                    }
+                }
+
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        StatMetricCard("الطلاب المضافون", "${students.size}", Icons.Default.People, MaterialTheme.colorScheme.tertiary, Modifier.weight(1f))
+                        StatMetricCard("الواجبات اليومية", "${homeworks.size}", Icons.Default.Assignment, Color(0xFF0D9488), Modifier.weight(1f))
                     }
                 }
             }
@@ -132,14 +101,23 @@ fun TeacherStatsScreen(
 }
 
 @Composable
-fun StatCard(label: String, value: String, icon: androidx.compose.ui.graphics.vector.ImageVector, color: Color, modifier: Modifier = Modifier) {
+private fun StatMetricCard(
+    label: String,
+    value: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    color: Color,
+    modifier: Modifier = Modifier
+) {
     Card(
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         modifier = modifier
     ) {
-        Column(modifier = Modifier.padding(14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
             Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(28.dp))
             Spacer(modifier = Modifier.height(6.dp))
             Text(value, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = color)

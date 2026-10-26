@@ -1,8 +1,23 @@
-<?xml version="1.0" encoding="utf-8"?>
-<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item
-        android:width="66dp"
-        android:height="66dp"
-        android:drawable="@drawable/rqeeb_logo"
-        android:gravity="center" />
-</layer-list>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Emblem centered within 108x108 safe zone (between 27 and 81) -->
+    <!-- Open Book in Clean White -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,48 C47,43 37,42 31,44 L31,68 C37,66 47,67 54,73 C61,67 71,66 77,68 L77,44 C71,42 61,43 54,48 Z" />
+    <!-- Book Center Divider in Amber -->
+    <path
+        android:fillColor="#D97706"
+        android:pathData="M53,46 L55,46 L55,73 L53,73 Z" />
+    <!-- Golden Quill Nib / Wisdom Lamp -->
+    <path
+        android:fillColor="#FBBF24"
+        android:pathData="M54,26 L59,37 L54,46 L49,37 Z" />
+    <!-- Star of Excellence -->
+    <path
+        android:fillColor="#FEF08A"
+        android:pathData="M54,23 L55.3,25.8 L58,26.2 L56,28.1 L56.5,30.8 L54,29.3 L51.5,30.8 L52,28.1 L50,26.2 L52.7,25.8 Z" />
+</vector>

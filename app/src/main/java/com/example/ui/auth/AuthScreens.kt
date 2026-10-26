@@ -1,13 +1,10 @@
 package com.example.ui.auth
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -17,8 +14,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -31,13 +26,11 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
 import com.example.R
 import com.example.data.model.TeacherEntity
 import com.example.data.model.YemeniCurriculum
 import com.example.data.repository.RqeebRepository
 import com.example.util.ContactUtils
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
@@ -47,21 +40,17 @@ fun AuthScreen(
     onOwnerLoggedIn: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
-    val coroutineScope = rememberCoroutineScope()
     var selectedTab by remember { mutableIntStateOf(0) } // 0: Login, 1: Register
-
-    // Hidden Owner Login State (Exactly 10 taps)
+    var showOwnerDialog by remember { mutableStateOf(false) }
     var logoTapCount by remember { mutableIntStateOf(0) }
     var lastTapTime by remember { mutableLongStateOf(0L) }
-    var showOwnerDialog by remember { mutableStateOf(false) }
 
-    // Owner Login Modal Fields
     var ownerIdentifier by remember { mutableStateOf("") }
     var ownerPassword by remember { mutableStateOf("") }
     var ownerPasswordVisible by remember { mutableStateOf(false) }
     var ownerErrorMessage by remember { mutableStateOf<String?>(null) }
     var isOwnerLoading by remember { mutableStateOf(false) }
+    val coroutineScope = rememberCoroutineScope()
 
     fun handleLogoTap() {
         val now = System.currentTimeMillis()
@@ -137,51 +126,29 @@ fun AuthScreen(
             Spacer(modifier = Modifier.height(4.dp))
 
             Text(
-                text = "أهلاً بك في مساعدك الذكي للتعليم",
-                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
-                color = MaterialTheme.colorScheme.onSurface,
+                text = "المنصة الشاملة للمعلم اليمني وفق طبعتي صنعاء وعدن",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
-            )
-
-            Text(
-                text = "مخصص للمنهج والمدارس اليمنية | حضّر دروسك، أنشئ اختباراتك، ونظّم عملك بذكاء",
-                style = MaterialTheme.typography.bodySmall.copy(
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                ),
-                textAlign = TextAlign.Center,
-                modifier = Modifier.padding(horizontal = 8.dp)
             )
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            // Tab Selector: تسجيل دخول المعلم / إنشاء حساب جديد
             TabRow(
                 selectedTabIndex = selectedTab,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp)),
-                containerColor = MaterialTheme.colorScheme.surfaceVariant
+                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                modifier = Modifier.fillMaxWidth()
             ) {
                 Tab(
                     selected = selectedTab == 0,
                     onClick = { selectedTab = 0 },
-                    text = {
-                        Text(
-                            "تسجيل دخول المعلم",
-                            fontWeight = if (selectedTab == 0) FontWeight.Bold else FontWeight.Normal
-                        )
-                    },
+                    text = { Text("تسجيل الدخول", fontWeight = FontWeight.Bold) },
                     modifier = Modifier.testTag("tab_login")
                 )
                 Tab(
                     selected = selectedTab == 1,
                     onClick = { selectedTab = 1 },
-                    text = {
-                        Text(
-                            "إنشاء حساب جديد",
-                            fontWeight = if (selectedTab == 1) FontWeight.Bold else FontWeight.Normal
-                        )
-                    },
+                    text = { Text("حساب معلم جديد", fontWeight = FontWeight.Bold) },
                     modifier = Modifier.testTag("tab_register")
                 )
             }
@@ -201,84 +168,39 @@ fun AuthScreen(
                     modifier = Modifier.fillMaxWidth()
                 )
             }
-
-            Spacer(modifier = Modifier.height(20.dp))
-
-            // Owner Contact & WhatsApp Button
-            OutlinedButton(
-                onClick = {
-                    coroutineScope.launch {
-                        val whatsappUrl = repository.getOwnerWhatsAppUrl()
-                        ContactUtils.openOwnerWhatsApp(context, whatsappUrl)
-                    }
-                },
-                shape = RoundedCornerShape(24.dp),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF059669)),
-                modifier = Modifier.testTag("contact_owner_button")
-            ) {
-                Icon(Icons.Default.Chat, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("تواصل مع إدارة رقيب (واتساب)", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            Text(
-                text = "الجمهورية اليمنية - منظومة المعلم التربوية الذكية © رقيب",
-                style = MaterialTheme.typography.labelSmall.copy(
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                ),
-                textAlign = TextAlign.Center
-            )
         }
     }
 
-    // Hidden Owner Login Modal (10 taps)
     if (showOwnerDialog) {
-        Dialog(onDismissRequest = {
-            showOwnerDialog = false
-            ownerErrorMessage = null
-            ownerPassword = ""
-        }) {
-            Card(
-                shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(8.dp)
-                    .testTag("owner_login_dialog")
-            ) {
+        AlertDialog(
+            onDismissRequest = {
+                if (!isOwnerLoading) showOwnerDialog = false
+            },
+            icon = {
+                Icon(
+                    Icons.Default.Security,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(36.dp)
+                )
+            },
+            title = {
+                Text(
+                    "بوابة المالك المركزي (Realme Control)",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    textAlign = TextAlign.Center
+                )
+            },
+            text = {
                 Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(22.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.AdminPanelSettings,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(44.dp)
-                    )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
                     Text(
-                        text = "تسجيل دخول المالك",
-                        style = MaterialTheme.typography.titleLarge.copy(
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    )
-
-                    Text(
-                        text = "الإدارة المركزية لمنصة رقيب التعليمية",
+                        "هذه البوابة مخصصة حصرياً لمالك النظام لإدارة وتفعيل حسابات المعلمين من هاتفه Realme:",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-
-                    Spacer(modifier = Modifier.height(16.dp))
 
                     OutlinedTextField(
                         value = ownerIdentifier,
@@ -286,16 +208,11 @@ fun AuthScreen(
                             ownerIdentifier = it
                             ownerErrorMessage = null
                         },
-                        label = { Text("البريد الإلكتروني للمالك (abdulrqeebfarag2018@gmail.com)") },
+                        label = { Text("معرف المالك أو البريد") },
                         placeholder = { Text("abdulrqeebfarag2018@gmail.com") },
-                        leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) },
                         singleLine = true,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("owner_username_input")
+                        modifier = Modifier.fillMaxWidth().testTag("owner_identifier_input")
                     )
-
-                    Spacer(modifier = Modifier.height(10.dp))
 
                     OutlinedTextField(
                         value = ownerPassword,
@@ -303,88 +220,68 @@ fun AuthScreen(
                             ownerPassword = it
                             ownerErrorMessage = null
                         },
-                        label = { Text("كلمة المرور") },
-                        leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null) },
+                        label = { Text("كلمة مرور المالك") },
+                        visualTransformation = if (ownerPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                         trailingIcon = {
                             IconButton(onClick = { ownerPasswordVisible = !ownerPasswordVisible }) {
                                 Icon(
-                                    imageVector = if (ownerPasswordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                                    contentDescription = "تبديل الرؤية"
+                                    if (ownerPasswordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                    contentDescription = null
                                 )
                             }
                         },
-                        visualTransformation = if (ownerPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                         singleLine = true,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("owner_password_input")
+                        modifier = Modifier.fillMaxWidth().testTag("owner_password_input")
                     )
 
                     if (ownerErrorMessage != null) {
-                        Spacer(modifier = Modifier.height(8.dp))
                         Text(
                             text = ownerErrorMessage!!,
                             color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall,
-                            textAlign = TextAlign.Center
+                            style = MaterialTheme.typography.bodySmall
                         )
                     }
-
-                    Spacer(modifier = Modifier.height(18.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        OutlinedButton(
-                            onClick = {
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        isOwnerLoading = true
+                        coroutineScope.launch {
+                            val ok = repository.verifyOwner(ownerPassword, ownerIdentifier)
+                            isOwnerLoading = false
+                            if (ok) {
                                 showOwnerDialog = false
-                                ownerErrorMessage = null
-                                ownerPassword = ""
-                            },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("إلغاء")
-                        }
-
-                        Button(
-                            onClick = {
-                                if (ownerPassword.isBlank()) {
-                                    ownerErrorMessage = "يرجى إدخال كلمة المرور"
-                                    return@Button
-                                }
-                                isOwnerLoading = true
-                                coroutineScope.launch {
-                                    val isVerified = repository.verifyOwner(ownerPassword, ownerIdentifier)
-                                    isOwnerLoading = false
-                                    if (isVerified) {
-                                        showOwnerDialog = false
-                                        onOwnerLoggedIn()
-                                    } else {
-                                        ownerErrorMessage = "بيانات الدخول غير صحيحة"
-                                    }
-                                }
-                            },
-                            enabled = !isOwnerLoading,
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("owner_submit_button")
-                        ) {
-                            if (isOwnerLoading) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(20.dp),
-                                    color = MaterialTheme.colorScheme.onPrimary,
-                                    strokeWidth = 2.dp
-                                )
+                                onOwnerLoggedIn()
                             } else {
-                                Text("دخول المالك")
+                                ownerErrorMessage = "بيانات المالك غير صحيحة"
                             }
                         }
+                    },
+                    enabled = !isOwnerLoading,
+                    modifier = Modifier.testTag("submit_owner_login")
+                ) {
+                    if (isOwnerLoading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Text("دخول المالك")
                     }
                 }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showOwnerDialog = false },
+                    enabled = !isOwnerLoading
+                ) {
+                    Text("إلغاء")
+                }
             }
-        }
+        )
     }
 }
 
@@ -456,132 +353,100 @@ fun TeacherLoginForm(
                 },
                 label = { Text("كلمة المرور") },
                 leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null) },
+                visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                 trailingIcon = {
                     IconButton(onClick = { passwordVisible = !passwordVisible }) {
                         Icon(
-                            imageVector = if (passwordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                            contentDescription = "إظهار كلمة المرور"
+                            if (passwordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                            contentDescription = null
                         )
                     }
                 },
-                visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                 singleLine = true,
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("teacher_password_input")
             )
 
-            Spacer(modifier = Modifier.height(6.dp))
+            if (errorMessage != null) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = errorMessage!!,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+
+            Spacer(modifier = Modifier.height(18.dp))
+
+            Button(
+                onClick = {
+                    if (identifier.isBlank() || password.isBlank()) {
+                        errorMessage = "يرجى إدخال البريد/الهاتف وكلمة المرور"
+                        return@Button
+                    }
+                    isLoading = true
+                    coroutineScope.launch {
+                        val teacher = repository.getTeacherByLogin(identifier.trim())
+                        isLoading = false
+                        if (teacher == null) {
+                            errorMessage = "الحساب غير موجود. يرجى التأكد من البيانات أو تسجيل حساب جديد"
+                        } else if (teacher.passwordHash != password.trim()) {
+                            errorMessage = "كلمة المرور غير صحيحة"
+                        } else if (teacher.status == TeacherEntity.STATUS_PENDING || !teacher.isActivated) {
+                            errorMessage = "حسابك قيد المراجعة بانتظار موافقة المالك، أو يمكنك التفعيل بكود الأمان الممنوح لك"
+                        } else if (teacher.status == TeacherEntity.STATUS_SUSPENDED) {
+                            errorMessage = "تم تعليق الحساب مؤقتاً: ${teacher.reviewNotes}. يرجى التواصل مع الإدارة"
+                        } else if (teacher.status == TeacherEntity.STATUS_REJECTED) {
+                            errorMessage = "تم رفض الطلب: ${teacher.reviewNotes}"
+                        } else {
+                            onSuccess(teacher)
+                        }
+                    }
+                },
+                enabled = !isLoading,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp)
+                    .testTag("teacher_login_submit_button")
+            ) {
+                if (isLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Text("تسجيل الدخول", fontWeight = FontWeight.Bold)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 TextButton(
                     onClick = { showForgotPasswordDialog = true },
                     modifier = Modifier.testTag("forgot_password_button")
                 ) {
-                    Text(
-                        "نسيت كلمة المرور؟",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary
-                    )
+                    Text("نسيت كلمة المرور؟", fontSize = 13.sp)
                 }
-            }
 
-            if (errorMessage != null) {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
-                    shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 4.dp)
+                TextButton(
+                    onClick = {
+                        activationIdentifierInput = identifier
+                        showActivationDialog = true
+                    },
+                    modifier = Modifier.testTag("open_activation_code_dialog")
                 ) {
-                    Text(
-                        text = errorMessage!!,
-                        color = MaterialTheme.colorScheme.onErrorContainer,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(10.dp),
-                        textAlign = TextAlign.Center
-                    )
+                    Icon(Icons.Default.VpnKey, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("تفعيل بكود المالك", fontSize = 13.sp)
                 }
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            Button(
-                onClick = {
-                    if (identifier.isBlank() || password.isBlank()) {
-                        errorMessage = "يرجى إدخال البريد الإلكتروني/رقم الهاتف وكلمة المرور"
-                        return@Button
-                    }
-                    isLoading = true
-                    coroutineScope.launch {
-                        val teacher = repository.getTeacherByLogin(identifier)
-                        isLoading = false
-                        if (teacher == null) {
-                            errorMessage = "بيانات الدخول غير متطابقة مع أي حساب مسجل"
-                            return@launch
-                        }
-
-                        if (teacher.passwordHash != password) {
-                            errorMessage = "كلمة المرور غير صحيحة"
-                            return@launch
-                        }
-
-                        when (teacher.status) {
-                            TeacherEntity.STATUS_PENDING -> {
-                                errorMessage = "حسابك قيد المراجعة حالياً من إدارة رقيب. إذا استلمت كود التفعيل من المالك، اضغط على زر تفعيل الحساب بالكود أدناه."
-                                activationIdentifierInput = identifier
-                            }
-                            TeacherEntity.STATUS_SUSPENDED -> {
-                                errorMessage = "تم تعليق هذا الحساب بواسطة إدارة النظام. للتواصل: +967785502919"
-                            }
-                            TeacherEntity.STATUS_REJECTED -> {
-                                errorMessage = "تم رفض طلب التسجيل لهذا الحساب."
-                            }
-                            else -> {
-                                onSuccess(teacher)
-                            }
-                        }
-                    }
-                },
-                enabled = !isLoading,
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(50.dp)
-                    .testTag("teacher_login_submit")
-            ) {
-                if (isLoading) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(22.dp),
-                        color = MaterialTheme.colorScheme.onPrimary,
-                        strokeWidth = 2.dp
-                    )
-                } else {
-                    Text("تسجيل الدخول", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                }
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            OutlinedButton(
-                onClick = {
-                    activationIdentifierInput = identifier
-                    activationMessage = null
-                    showActivationDialog = true
-                },
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(46.dp)
-                    .testTag("open_activation_code_dialog")
-            ) {
-                Icon(Icons.Default.VpnKey, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("معي كود تفعيل من المالك", fontSize = 14.sp)
             }
         }
     }
@@ -659,23 +524,19 @@ fun TeacherLoginForm(
                             return@Button
                         }
                         isActivating = true
-                        activationMessage = null
                         coroutineScope.launch {
-                            val result = repository.activateWithCode(
+                            val (success, msg) = repository.activateWithCode(
                                 activationIdentifierInput.trim(),
                                 activationCodeInput.trim()
                             )
                             isActivating = false
-                            if (result.first) {
-                                activationMessage = result.second
-                                kotlinx.coroutines.delay(1000)
+                            activationMessage = msg
+                            if (success) {
                                 showActivationDialog = false
-                                val activatedTeacher = repository.getTeacherByLogin(activationIdentifierInput.trim())
-                                if (activatedTeacher != null) {
-                                    onSuccess(activatedTeacher)
+                                val active = repository.getTeacherByLogin(activationIdentifierInput.trim())
+                                if (active != null) {
+                                    onSuccess(active)
                                 }
-                            } else {
-                                activationMessage = result.second
                             }
                         }
                     },
@@ -744,8 +605,9 @@ fun TeacherRegisterForm(
     var governorate by remember { mutableStateOf("أمانة العاصمة") }
     var directorate by remember { mutableStateOf("") }
     var subject by remember { mutableStateOf("الرياضيات") }
-    var stage by remember { mutableStateOf("مرحلة التعليم الأساسي") }
-    var gradeTaught by remember { mutableStateOf("الصف التاسع الأساسي") }
+    var stage by remember { mutableStateOf("المرحلة الإعدادية") }
+    var gradeTaught by remember { mutableStateOf("9/ إعدادي") }
+    var section by remember { mutableStateOf("") }
     var curriculumEdition by remember { mutableStateOf("طبعة صنعاء (وزارة التربية والتعليم - صنعاء)") }
     var password by remember { mutableStateOf("") }
     var confirmPassword by remember { mutableStateOf("") }
@@ -756,7 +618,6 @@ fun TeacherRegisterForm(
     var successMessage by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(false) }
 
-    // Dropdown expansion states
     var govExpanded by remember { mutableStateOf(false) }
     var editionExpanded by remember { mutableStateOf(false) }
     var gradeExpanded by remember { mutableStateOf(false) }
@@ -836,7 +697,7 @@ fun TeacherRegisterForm(
                         readOnly = true,
                         label = { Text("المحافظة") },
                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = govExpanded) },
-                        modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable, true)
+                        modifier = Modifier.menuAnchor().fillMaxWidth()
                     )
                     ExposedDropdownMenu(
                         expanded = govExpanded,
@@ -876,7 +737,7 @@ fun TeacherRegisterForm(
                     readOnly = true,
                     label = { Text("طبعة المنهج المعتمد بالمدرسة *") },
                     trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = editionExpanded) },
-                    modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable, true)
+                    modifier = Modifier.fillMaxWidth().menuAnchor()
                 )
                 ExposedDropdownMenu(
                     expanded = editionExpanded,
@@ -894,7 +755,7 @@ fun TeacherRegisterForm(
                 }
             }
 
-            // Subject and Grade
+            // Subject and Grade (Using 12 official display names)
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value = subject,
@@ -915,18 +776,18 @@ fun TeacherRegisterForm(
                         readOnly = true,
                         label = { Text("الصف الدراسي *") },
                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = gradeExpanded) },
-                        modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable, true)
+                        modifier = Modifier.menuAnchor().fillMaxWidth()
                     )
                     ExposedDropdownMenu(
                         expanded = gradeExpanded,
                         onDismissRequest = { gradeExpanded = false }
                     ) {
-                        YemeniCurriculum.ALL_GRADES.forEach { g ->
+                        YemeniCurriculum.DISPLAY_GRADES.forEach { g ->
                             DropdownMenuItem(
                                 text = { Text(g) },
                                 onClick = {
                                     gradeTaught = g
-                                    stage = if (g.contains("الثانوي")) "مرحلة التعليم الثانوي" else "مرحلة التعليم الأساسي"
+                                    stage = YemeniCurriculum.getStageForDisplayGrade(g)
                                     gradeExpanded = false
                                 }
                             )
@@ -960,19 +821,15 @@ fun TeacherRegisterForm(
 
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { termsAccepted = !termsAccepted }
-                    .padding(vertical = 4.dp)
+                modifier = Modifier.fillMaxWidth()
             ) {
                 Checkbox(
                     checked = termsAccepted,
                     onCheckedChange = { termsAccepted = it },
                     modifier = Modifier.testTag("terms_checkbox")
                 )
-                Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "أوافق على الشروط والأحكام والسياسة التعليمية لرقيب",
+                    text = "أقر بأنني معلم/ـة في الجمهورية اليمنية وأوافق على شروط الخدمة",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface
                 )
@@ -1028,6 +885,7 @@ fun TeacherRegisterForm(
                             subject = subject.trim(),
                             stage = stage,
                             gradeTaught = gradeTaught,
+                            section = section,
                             curriculumEdition = curriculumEdition,
                             deviceModel = "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}".trim()
                         )
@@ -1035,7 +893,6 @@ fun TeacherRegisterForm(
                         isLoading = false
                         if (success) {
                             successMessage = message
-                            delay(1800)
                             onRegistered()
                         } else {
                             errorMessage = message
@@ -1043,16 +900,15 @@ fun TeacherRegisterForm(
                     }
                 },
                 enabled = !isLoading,
-                shape = RoundedCornerShape(12.dp),
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(50.dp)
-                    .testTag("reg_submit_button")
+                    .testTag("submit_registration_button")
             ) {
                 if (isLoading) {
-                    CircularProgressIndicator(modifier = Modifier.size(22.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary)
                 } else {
-                    Text("إنشاء حساب المعلم", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text("إرسال طلب الانضمام", fontWeight = FontWeight.Bold)
                 }
             }
         }

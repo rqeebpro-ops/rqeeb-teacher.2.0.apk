@@ -34,36 +34,30 @@ import com.example.data.model.TeacherEntity
 import com.example.data.model.YemeniCurriculum
 import com.example.data.repository.RqeebRepository
 import com.example.util.ContactUtils
-import kotlinx.coroutines.launch
 
-enum class TeacherSection(
-    val titleAr: String,
-    val subtitleAr: String,
+enum class TeacherSection {
+    LESSON_PREP,
+    EXAMS,
+    PRIMARY_MATH,
+    LIBRARY,
+    TIMETABLE,
+    HOMEWORK,
+    STUDENT_GRADES,
+    TERM_PLAN,
+    AI_TOOLS,
+    LESSON_ARCHIVE,
+    ORAL_EXAMS,
+    SETTINGS,
+    STATS
+}
+
+data class DashboardItem(
+    val section: TeacherSection,
+    val title: String,
+    val subtitle: String,
     val icon: ImageVector,
     val color: Color
-) {
-    LESSON_PREP("تحضير درس جديد", "وفق المعايير والنموذج اليمني المعتمد", Icons.Default.MenuBook, Color(0xFF0D47A1)),
-    AI_TOOLS("مساعد المعلم بالذكاء الاصطناعي", "تبسيط وتوقع الأسئلة وبودكاست تعليمي", Icons.Default.AutoAwesome, Color(0xFF0284C7)),
-    LIBRARY("مكتبة الكتب والمناهج اليمنية", "طبعات صنعاء وعدن والمقررات الرسمية", Icons.Default.LibraryBooks, Color(0xFFD97706)),
-    LESSON_ARCHIVE("أرشيف الدروس", "تصفح وتحميل وطباعة الخطط بصيغة PDF", Icons.Default.FolderSpecial, Color(0xFF2563EB)),
-    EXAMS("الاختبارات", "مولد الاختبارات بالذكاء الاصطناعي", Icons.Default.Quiz, Color(0xFF0D9488)),
-    MANUAL_EXAM_EDITOR("محرر الاختبارات اليدوي", "صياغة وتعديل وتنسيق الأسئلة يدوياً", Icons.Default.EditNote, Color(0xFF7C3AED)),
-    ONLINE_EXAMS("الاختبارات الإلكترونية", "تعيين كود وزمن ونشر لطلاب الفصل", Icons.Default.Public, Color(0xFF059669)),
-    ORAL_EXAMS("الاختبارات الشفوية", "سحب عشوائي للطلاب ومصفوفة تقييم Rubric", Icons.Default.RecordVoiceOver, Color(0xFFCA8A04)),
-    HOMEWORK("الواجبات المنزلية", "إسناد ومتابعة تسليم المهام الصفية", Icons.Default.Assignment, Color(0xFF4F46E5)),
-    STUDENT_GRADES("درجات الطلاب", "كشوفات أعمال السنة والاختبارات والمعدل", Icons.Default.Score, Color(0xFF16A34A)),
-    ATTENDANCE("الحضور والغياب", "رصد الحضور اليومي وتتبع نسب الغياب", Icons.Default.Checklist, Color(0xFF0891B2)),
-    TIMETABLE("جدول الحصص", "تنظيم الحصص الأسبوعية والقاعات الدراسية", Icons.Default.CalendarMonth, Color(0xFF0284C7)),
-    TERM_PLAN("الخطة الفصلية", "توزيع المنهج اليمني على أسابيع الفصل", Icons.Default.CalendarViewWeek, Color(0xFF10B981)),
-    WHITEBOARD("السبورة التفاعلية", "سبورة خضراء وبيضاء للشرح باللمس", Icons.Default.Draw, Color(0xFFE11D48)),
-    MIND_MAPS("الملخصات والخرائط الذهنية", "هياكل بصرية وملخصات مركزة للمفاهيم", Icons.Default.Hub, Color(0xFF059669)),
-    EXAM_GRADER("مصحح الاختبارات بالصور", "تصحيح الإجابات آلياً ومقارنتها بالنموذج", Icons.Default.FactCheck, Color(0xFF9333EA)),
-    EXAM_SOLVER("حل نماذج الاختبارات", "حل المسائل خطوة بخطوة مع توضيح القواعد", Icons.Default.Calculate, Color(0xFF0284C7)),
-    STUDENT_PORTAL("بوابة الطلاب", "محاكاة خوض الطلاب للاختبارات الإلكترونية", Icons.Default.School, Color(0xFF10B981)),
-    STATISTICS("الإحصائيات", "لوحة قياس الأداء التربوي وتحصيل الصفوف", Icons.Default.BarChart, Color(0xFF3B82F6)),
-    PRIMARY_MATH("رياضيات المرحلة الابتدائية", "إتقان الجمع بالحمل والطرح بالاستلاف وبنك مسائل", Icons.Default.Calculate, Color(0xFFE65100)),
-    SETTINGS("الإعدادات", "الملف الشخصي والبيانات والمظهر", Icons.Default.Settings, Color(0xFF64748B))
-}
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -76,10 +70,8 @@ fun TeacherDashboard(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val coroutineScope = rememberCoroutineScope()
     var currentSection by remember { mutableStateOf<TeacherSection?>(null) }
     var activeTeacher by remember { mutableStateOf(teacher) }
-    var injectedLessonContent by remember { mutableStateOf("") }
 
     if (currentSection != null) {
         when (currentSection!!) {
@@ -91,32 +83,7 @@ fun TeacherDashboard(
                     onBack = { currentSection = null }
                 )
             }
-            TeacherSection.AI_TOOLS -> {
-                AiToolsScreen(
-                    teacher = activeTeacher,
-                    geminiService = geminiService,
-                    onBack = { currentSection = null }
-                )
-            }
-            TeacherSection.LIBRARY -> {
-                EducationalLibraryScreen(
-                    teacher = activeTeacher,
-                    repository = repository,
-                    onBack = { currentSection = null },
-                    onUseInLesson = { extracted ->
-                        injectedLessonContent = extracted
-                        currentSection = TeacherSection.LESSON_PREP
-                    }
-                )
-            }
-            TeacherSection.LESSON_ARCHIVE -> {
-                LessonArchiveScreen(
-                    teacher = activeTeacher,
-                    repository = repository,
-                    onBack = { currentSection = null }
-                )
-            }
-            TeacherSection.EXAMS, TeacherSection.MANUAL_EXAM_EDITOR, TeacherSection.ONLINE_EXAMS -> {
+            TeacherSection.EXAMS -> {
                 ExamGeneratorScreen(
                     teacher = activeTeacher,
                     repository = repository,
@@ -124,8 +91,23 @@ fun TeacherDashboard(
                     onBack = { currentSection = null }
                 )
             }
-            TeacherSection.ORAL_EXAMS -> {
-                OralExamScreen(
+            TeacherSection.PRIMARY_MATH -> {
+                PrimaryMathScreen(
+                    repository = repository,
+                    onBack = { currentSection = null }
+                )
+            }
+            TeacherSection.LIBRARY -> {
+                EducationalLibraryScreen(
+                    teacher = activeTeacher,
+                    repository = repository,
+                    onBack = { currentSection = null }
+                )
+            }
+            TeacherSection.TIMETABLE -> {
+                TimetableScreen(
+                    teacher = activeTeacher,
+                    repository = repository,
                     onBack = { currentSection = null }
                 )
             }
@@ -143,20 +125,6 @@ fun TeacherDashboard(
                     onBack = { currentSection = null }
                 )
             }
-            TeacherSection.ATTENDANCE -> {
-                AttendanceScreen(
-                    teacher = activeTeacher,
-                    repository = repository,
-                    onBack = { currentSection = null }
-                )
-            }
-            TeacherSection.TIMETABLE -> {
-                TimetableScreen(
-                    teacher = activeTeacher,
-                    repository = repository,
-                    onBack = { currentSection = null }
-                )
-            }
             TeacherSection.TERM_PLAN -> {
                 TermPlanScreen(
                     teacher = activeTeacher,
@@ -164,46 +132,22 @@ fun TeacherDashboard(
                     onBack = { currentSection = null }
                 )
             }
-            TeacherSection.WHITEBOARD -> {
-                InteractiveWhiteboardScreen(
-                    onBack = { currentSection = null }
-                )
-            }
-            TeacherSection.MIND_MAPS -> {
-                MindMapScreen(
+            TeacherSection.AI_TOOLS -> {
+                AiToolsScreen(
                     teacher = activeTeacher,
                     geminiService = geminiService,
                     onBack = { currentSection = null }
                 )
             }
-            TeacherSection.EXAM_GRADER -> {
-                ExamGraderScreen(
-                    geminiService = geminiService,
-                    onBack = { currentSection = null }
-                )
-            }
-            TeacherSection.EXAM_SOLVER -> {
-                ExamSolverScreen(
-                    geminiService = geminiService,
-                    onBack = { currentSection = null }
-                )
-            }
-            TeacherSection.STUDENT_PORTAL -> {
-                StudentPortalScreen(
-                    repository = repository,
-                    onBack = { currentSection = null }
-                )
-            }
-            TeacherSection.STATISTICS -> {
-                TeacherStatsScreen(
+            TeacherSection.LESSON_ARCHIVE -> {
+                LessonArchiveScreen(
                     teacher = activeTeacher,
                     repository = repository,
                     onBack = { currentSection = null }
                 )
             }
-            TeacherSection.PRIMARY_MATH -> {
-                PrimaryMathScreen(
-                    repository = repository,
+            TeacherSection.ORAL_EXAMS -> {
+                OralExamScreen(
                     onBack = { currentSection = null }
                 )
             }
@@ -220,11 +164,33 @@ fun TeacherDashboard(
                     onBack = { currentSection = null }
                 )
             }
+            TeacherSection.STATS -> {
+                TeacherStatsScreen(
+                    teacher = activeTeacher,
+                    repository = repository,
+                    onBack = { currentSection = null }
+                )
+            }
         }
         return
     }
 
-    // Main Hub View with all 20 working sections
+    val dashboardItems = listOf(
+        DashboardItem(TeacherSection.LESSON_PREP, "تحضير الدروس", "الخطة القياسية والذكاء الاصطناعي", Icons.Default.EditNote, Color(0xFF006874)),
+        DashboardItem(TeacherSection.EXAMS, "صانع الاختبارات", "بنك الأسئلة والطباعة والرسومات", Icons.Default.Quiz, Color(0xFF0284C7)),
+        DashboardItem(TeacherSection.PRIMARY_MATH, "رياضيات الابتدائية", "شرح تفاعلي للحمل والاستلاف (1-6)", Icons.Default.Calculate, Color(0xFFD97706)),
+        DashboardItem(TeacherSection.LIBRARY, "المكتبة التعليمية", "المناهج والكتب والوحدات اليمنية", Icons.AutoMirrored.Filled.MenuBook, Color(0xFF0D9488)),
+        DashboardItem(TeacherSection.STUDENT_GRADES, "كشف الدرجات والطلاب", "سجل أعمال السنة والملاحظات", Icons.Default.Grade, Color(0xFF8B5CF6)),
+        DashboardItem(TeacherSection.TIMETABLE, "الجدول الأسبوعي", "توزيع الحصص والصفوف", Icons.Default.CalendarMonth, Color(0xFF2563EB)),
+        DashboardItem(TeacherSection.HOMEWORK, "الواجبات المنزلية", "التكليفات وتوثيق التمارين", Icons.Default.Assignment, Color(0xFF059669)),
+        DashboardItem(TeacherSection.TERM_PLAN, "الخطة الفصلية", "التوزيع الزمني للمقرر الدراسي", Icons.Default.ViewTimeline, Color(0xFF4F46E5)),
+        DashboardItem(TeacherSection.AI_TOOLS, "المساعد الذكي (AI)", "صياغة الأهداف والأنشطة والوسائل", Icons.Default.AutoAwesome, Color(0xFFEC4899)),
+        DashboardItem(TeacherSection.LESSON_ARCHIVE, "أرشيف الدروس", "سجل التحضيرات المحفوظة", Icons.Default.Folder, Color(0xFF64748B)),
+        DashboardItem(TeacherSection.ORAL_EXAMS, "الاختبارات الشفوية", "تقييم التلاوة والمطالعة الشفوية", Icons.Default.RecordVoiceOver, Color(0xFFE11D48)),
+        DashboardItem(TeacherSection.STATS, "الإحصائيات والتقارير", "بيانات الإنجاز والمتابعة", Icons.Default.BarChart, Color(0xFF10B981)),
+        DashboardItem(TeacherSection.SETTINGS, "إعدادات المعلم", "الملف الشخصي، الصف والشعبة", Icons.Default.Settings, Color(0xFF475569))
+    )
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -263,13 +229,8 @@ fun TeacherDashboard(
                 },
                 actions = {
                     IconButton(
-                        onClick = {
-                            coroutineScope.launch {
-                                val url = repository.getOwnerWhatsAppUrl()
-                                ContactUtils.openOwnerWhatsApp(context, url)
-                            }
-                        },
-                        modifier = Modifier.testTag("teacher_whatsapp_help_button")
+                        onClick = { ContactUtils.openOwnerWhatsApp(context) },
+                        modifier = Modifier.testTag("whatsapp_support_button")
                     ) {
                         Icon(
                             Icons.Default.SupportAgent,
@@ -341,8 +302,10 @@ fun TeacherDashboard(
                             maxLines = 1,
                             overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                         )
+                        val displayGrade = YemeniCurriculum.toDisplayGrade(activeTeacher.gradeTaught)
+                        val sectionStr = if (activeTeacher.section.isNotBlank()) " | شعبة ${activeTeacher.section}" else ""
                         Text(
-                            "${activeTeacher.schoolName} • ${activeTeacher.governorate} (${activeTeacher.directorate})",
+                            "${activeTeacher.schoolName} • $displayGrade$sectionStr",
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
@@ -375,111 +338,59 @@ fun TeacherDashboard(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    "أقسام المنظومة التعليمية (20 قسماً متكاملاً):",
-                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                    color = MaterialTheme.colorScheme.primary
-                )
-
-                TextButton(
-                    onClick = {
-                        coroutineScope.launch {
-                            val url = repository.getOwnerWhatsAppUrl()
-                            ContactUtils.openOwnerWhatsApp(context, url)
-                        }
-                    },
-                    contentPadding = PaddingValues(horizontal = 6.dp)
-                ) {
-                    Icon(Icons.Default.Chat, contentDescription = null, tint = Color(0xFF059669), modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("تواصل مع الإدارة", fontSize = 11.sp, color = Color(0xFF059669), fontWeight = FontWeight.Bold)
-                }
-            }
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            // 20 Working Modules Grid (Responsive Auto-fit minmax layout)
+            // Grid of Hub Modules
             LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = 150.dp),
+                columns = GridCells.Fixed(2),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
-                items(TeacherSection.values()) { section ->
-                    DashboardModuleCard(
-                        section = section,
-                        onClick = { currentSection = section }
-                    )
-                }
-            }
-        }
-    }
-}
+                items(dashboardItems) { item ->
+                    Card(
+                        shape = RoundedCornerShape(14.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 1.5.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { currentSection = item.section }
+                            .testTag("dashboard_item_${item.section.name}")
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = item.color.copy(alpha = 0.12f),
+                                modifier = Modifier.size(40.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        item.icon,
+                                        contentDescription = null,
+                                        tint = item.color,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                }
+                            }
 
-@Composable
-fun DashboardModuleCard(
-    section: TeacherSection,
-    onClick: () -> Unit
-) {
-    Card(
-        onClick = onClick,
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.5.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .defaultMinSize(minHeight = 124.dp)
-            .testTag("module_${section.name.lowercase()}")
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(11.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Surface(
-                shape = RoundedCornerShape(10.dp),
-                color = section.color.copy(alpha = 0.12f),
-                modifier = Modifier.size(36.dp)
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        imageVector = section.icon,
-                        contentDescription = null,
-                        tint = section.color,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-            }
+                            Text(
+                                text = item.title,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
 
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(2.dp)
-            ) {
-                Text(
-                    text = section.titleAr,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 12.5.sp,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                    softWrap = true
-                )
-                Text(
-                    text = section.subtitleAr,
-                    fontSize = 10.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    lineHeight = 13.5.sp,
-                    maxLines = 2,
-                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                    softWrap = true
-                )
+                            Text(
+                                text = item.subtitle,
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
             }
         }
     }

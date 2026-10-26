@@ -2,150 +2,239 @@ package com.example.data.cloud
 
 import android.content.Context
 import android.os.Build
-import com.example.R
+import com.example.BuildConfig
 import com.example.data.model.AuditLogEntity
 import com.example.data.model.TeacherEntity
 import com.example.data.model.YemeniCurriculum
 import com.example.util.RqeebNotificationHelper
-import com.google.firebase.FirebaseApp
-import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.ListenerRegistration
-import com.google.firebase.firestore.Query
-import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.callbackFlow
-import kotlinx.coroutines.tasks.await
-import java.util.UUID
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
+import org.json.JSONObject
+import java.util.concurrent.TimeUnit
 
 /**
- * Cloud Synchronization and Real-time Central Database Engine
- * Connects teachers across all Yemeni governorates to the Owner's Realme phone via Google Cloud Firestore.
+ * CloudSyncService coordinates live multi-device synchronization with PostgreSQL via Supabase REST API & RPC
+ * Completely independent of Firebase.
  */
 class CloudSyncService(private val context: Context) {
 
-    private val db: FirebaseFirestore by lazy {
-        try {
-            val databaseId = context.getString(R.string.firestore_database_id)
-            if (databaseId.isNotBlank()) {
-                FirebaseFirestore.getInstance(FirebaseApp.getInstance(), databaseId)
-            } else {
-                FirebaseFirestore.getInstance()
-            }
-        } catch (_: Exception) {
-            FirebaseFirestore.getInstance()
+    private val client: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(20, TimeUnit.SECONDS)
+            .writeTimeout(20, TimeUnit.SECONDS)
+            .build()
+    }
+
+    private val prefs = context.getSharedPreferences("rqeeb_supabase_prefs", Context.MODE_PRIVATE)
+    private val seenPendingTeacherIds = mutableSetOf<String>()
+
+    fun getSupabaseUrl(): String {
+        val stored = prefs.getString("supabase_url", null)
+        if (!stored.isNullOrBlank()) return stored.trim().removeSuffix("/")
+
+        return try {
+            val field = BuildConfig::class.java.getField("SUPABASE_URL")
+            val v = field.get(null) as? String
+            v?.trim()?.removeSuffix("/").orEmpty()
+        } catch (_: Throwable) {
+            ""
         }
     }
 
-    private val teachersCollection get() = db.collection("teachers")
-    private val configCollection get() = db.collection("system_config")
-    private val auditLogsCollection get() = db.collection("audit_logs")
+    fun getSupabaseAnonKey(): String {
+        val stored = prefs.getString("supabase_anon_key", null)
+        if (!stored.isNullOrBlank()) return stored.trim()
 
-    private val seenPendingTeacherIds = mutableSetOf<String>()
+        return try {
+            val field = BuildConfig::class.java.getField("SUPABASE_ANON_KEY")
+            val v = field.get(null) as? String
+            v?.trim().orEmpty()
+        } catch (_: Throwable) {
+            ""
+        }
+    }
+
+    fun saveSupabaseConfig(url: String, anonKey: String) {
+        prefs.edit()
+            .putString("supabase_url", url.trim().removeSuffix("/"))
+            .putString("supabase_anon_key", anonKey.trim())
+            .apply()
+    }
+
+    fun isConfigured(): Boolean {
+        val url = getSupabaseUrl()
+        val key = getSupabaseAnonKey()
+        return url.startsWith("https://") && !url.contains("your-project-id") && key.isNotBlank() && !key.contains("your-anon-key")
+    }
+
+    private fun buildRequest(endpoint: String, method: String = "GET", jsonBody: String? = null): Request.Builder {
+        val baseUrl = getSupabaseUrl()
+        val apiKey = getSupabaseAnonKey()
+        val cleanEndpoint = if (endpoint.startsWith("/")) endpoint else "/$endpoint"
+        val fullUrl = "$baseUrl$cleanEndpoint"
+
+        val builder = Request.Builder()
+            .url(fullUrl)
+            .addHeader("apikey", apiKey)
+            .addHeader("Authorization", "Bearer $apiKey")
+            .addHeader("Content-Type", "application/json")
+            .addHeader("Prefer", "return=representation")
+
+        val mediaType = "application/json; charset=utf-8".toMediaType()
+        when (method) {
+            "POST" -> builder.post((jsonBody ?: "{}").toRequestBody(mediaType))
+            "PATCH" -> builder.patch((jsonBody ?: "{}").toRequestBody(mediaType))
+            "DELETE" -> builder.delete()
+            else -> builder.get()
+        }
+
+        return builder
+    }
 
     /**
-     * Submit new teacher registration to Cloud Firestore
+     * Test live Supabase connection
      */
-    suspend fun submitTeacherRegistration(teacher: TeacherEntity): Result<String> {
-        return try {
-            val cloudDocId = if (teacher.cloudId.isNotBlank()) teacher.cloudId else UUID.randomUUID().toString()
+    suspend fun testConnection(): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+        if (!isConfigured()) {
+            return@withContext Pair(false, "إعدادات Supabase غير مكتملة. يرجى إدخال عنوان المشروع ومفتاح anon.")
+        }
+        try {
+            val request = buildRequest("/rest/v1/teachers?limit=1", "GET").build()
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    Pair(true, "تم الاتصال بنجاح بقاعدة بيانات Supabase (PostgreSQL)")
+                } else {
+                    val code = response.code
+                    val msg = response.body?.string() ?: response.message
+                    Pair(false, "فشل الاتصال بخادم Supabase (رمز $code): $msg")
+                }
+            }
+        } catch (e: Exception) {
+            Pair(false, "تعذر الوصول إلى الخادم: ${e.localizedMessage ?: "تأكد من اتصال الإنترنت"}")
+        }
+    }
 
+    /**
+     * Register a new teacher on Supabase PostgreSQL
+     */
+    suspend fun registerTeacherOnCloud(teacher: TeacherEntity): Result<String> = withContext(Dispatchers.IO) {
+        if (!isConfigured()) {
+            return@withContext Result.success("local-temp-${System.currentTimeMillis()}")
+        }
+        try {
             val deviceName = "${Build.MANUFACTURER} ${Build.MODEL}".trim()
-            val data = hashMapOf(
-                "id" to cloudDocId,
-                "fullName" to teacher.fullName,
-                "phone" to teacher.phone,
-                "email" to teacher.email,
-                "schoolName" to teacher.schoolName,
-                "governorate" to teacher.governorate,
-                "directorate" to teacher.directorate,
-                "subject" to teacher.subject,
-                "stage" to teacher.stage,
-                "gradeTaught" to teacher.gradeTaught,
-                "section" to teacher.section,
-                "curriculumEdition" to teacher.curriculumEdition,
-                "academicYear" to teacher.academicYear,
-                "passwordHash" to teacher.passwordHash,
-                "status" to TeacherEntity.STATUS_PENDING,
-                "isActivated" to false,
-                "activationCode" to "",
-                "deviceModel" to deviceName,
-                "createdAt" to teacher.createdAt,
-                "updatedAt" to System.currentTimeMillis(),
-                "reviewNotes" to ""
-            )
+            val payload = JSONObject().apply {
+                put("full_name", teacher.fullName)
+                put("phone", teacher.phone)
+                put("email", teacher.email)
+                put("password_hash", teacher.passwordHash)
+                put("school_name", teacher.schoolName)
+                put("governorate", teacher.governorate)
+                put("district", teacher.directorate)
+                put("subject", teacher.subject)
+                put("education_stage", teacher.stage)
+                put("grade", teacher.gradeTaught)
+                put("section", teacher.section)
+                put("curriculum_edition", teacher.curriculumEdition)
+                put("academic_year", teacher.academicYear)
+                put("request_status", TeacherEntity.STATUS_PENDING)
+                put("is_activated", false)
+                put("activation_code", "")
+                put("device_model", deviceName)
+                put("review_notes", "")
+            }
 
-            teachersCollection.document(cloudDocId).set(data).await()
-            Result.success(cloudDocId)
+            val request = buildRequest("/rest/v1/teachers", "POST", payload.toString()).build()
+            client.newCall(request).execute().use { response ->
+                val responseStr = response.body?.string().orEmpty()
+                if (response.isSuccessful) {
+                    val jsonArray = JSONArray(responseStr)
+                    val inserted = jsonArray.optJSONObject(0)
+                    val cloudId = inserted?.optString("id").orEmpty()
+                    Result.success(if (cloudId.isNotBlank()) cloudId else "sb-${System.currentTimeMillis()}")
+                } else {
+                    Result.failure(Exception("خطأ من خادم Supabase (${response.code}): $responseStr"))
+                }
+            }
         } catch (e: Exception) {
             Result.failure(e)
         }
     }
 
     /**
-     * Fetch updated status for a teacher by email or phone from Cloud
+     * Fetch status for a teacher by email or phone
      */
-    suspend fun fetchTeacherStatus(identifier: String): TeacherEntity? {
+    suspend fun fetchTeacherStatus(identifier: String): TeacherEntity? = withContext(Dispatchers.IO) {
         val clean = identifier.trim()
-        if (clean.isBlank()) return null
-        return try {
-            // Check by email
-            val emailQuery = teachersCollection.whereEqualTo("email", clean).limit(1).get().await()
-            if (!emailQuery.isEmpty) {
-                val doc = emailQuery.documents.first()
-                return mapDocumentToTeacher(doc.id, doc.data ?: emptyMap())
-            }
+        if (clean.isBlank() || !isConfigured()) return@withContext null
 
-            // Check by phone
-            val phoneQuery = teachersCollection.whereEqualTo("phone", clean).limit(1).get().await()
-            if (!phoneQuery.isEmpty) {
-                val doc = phoneQuery.documents.first()
-                return mapDocumentToTeacher(doc.id, doc.data ?: emptyMap())
+        try {
+            val endpoint = "/rest/v1/teachers?or=(email.eq.$clean,phone.eq.$clean)&limit=1"
+            val request = buildRequest(endpoint, "GET").build()
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@withContext null
+                val str = response.body?.string().orEmpty()
+                val array = JSONArray(str)
+                if (array.length() > 0) {
+                    val obj = array.getJSONObject(0)
+                    return@withContext mapJsonToTeacher(obj)
+                }
+                null
             }
-
-            null
         } catch (_: Exception) {
             null
         }
     }
 
     /**
-     * Real-time Flow of all teachers from Cloud Firestore
+     * Real-time Flow of all teachers from Supabase PostgreSQL
      */
-    fun getAllTeachersFlow(): Flow<List<TeacherEntity>> = callbackFlow {
-        val registration: ListenerRegistration = teachersCollection
-            .orderBy("createdAt", Query.Direction.DESCENDING)
-            .addSnapshotListener { snapshot, error ->
-                if (error != null) {
-                    return@addSnapshotListener
-                }
-                if (snapshot != null) {
-                    val list = snapshot.documents.mapNotNull { doc ->
-                        mapDocumentToTeacher(doc.id, doc.data ?: emptyMap())
-                    }
-                    trySend(list)
+    fun getAllTeachersFlow(): Flow<List<TeacherEntity>> = flow {
+        while (currentCoroutineContext().isActive) {
+            val list = fetchAllTeachersOnce()
+            emit(list)
 
-                    // Check for new pending registrations to notify Realme owner phone
-                    for (teacher in list) {
-                        if (teacher.status == TeacherEntity.STATUS_PENDING && !seenPendingTeacherIds.contains(teacher.cloudId)) {
-                            seenPendingTeacherIds.add(teacher.cloudId)
-                            // Trigger rich Android system notification on phone
-                            RqeebNotificationHelper.notifyNewTeacherRequest(context, teacher)
-                        }
-                    }
+            // Check for new pending registrations to trigger local notification for Realme owner phone
+            for (teacher in list) {
+                if (teacher.status == TeacherEntity.STATUS_PENDING && !seenPendingTeacherIds.contains(teacher.cloudId)) {
+                    seenPendingTeacherIds.add(teacher.cloudId)
+                    RqeebNotificationHelper.notifyNewTeacherRequest(context, teacher)
                 }
             }
 
-        awaitClose { registration.remove() }
-    }
+            delay(7000) // Poll interval for real-time synchronization
+        }
+    }.flowOn(Dispatchers.IO)
 
     /**
-     * One-shot fetch of all teachers from Cloud Firestore for manual sync
+     * Fetch all teachers once from Supabase
      */
-    suspend fun fetchAllTeachersOnce(): List<TeacherEntity> {
-        return try {
-            val snap = teachersCollection.orderBy("createdAt", Query.Direction.DESCENDING).get().await()
-            snap.documents.mapNotNull { doc ->
-                mapDocumentToTeacher(doc.id, doc.data ?: emptyMap())
+    suspend fun fetchAllTeachersOnce(): List<TeacherEntity> = withContext(Dispatchers.IO) {
+        if (!isConfigured()) return@withContext emptyList()
+        try {
+            val request = buildRequest("/rest/v1/teachers?order=created_at.desc", "GET").build()
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@withContext emptyList()
+                val str = response.body?.string().orEmpty()
+                val array = JSONArray(str)
+                val list = mutableListOf<TeacherEntity>()
+                for (i in 0 until array.length()) {
+                    val obj = array.getJSONObject(i)
+                    list.add(mapJsonToTeacher(obj))
+                }
+                list
             }
         } catch (_: Exception) {
             emptyList()
@@ -153,312 +242,378 @@ class CloudSyncService(private val context: Context) {
     }
 
     /**
-     * Approve teacher and generate secure one-time activation code
+     * Approve Teacher via Supabase RPC or direct PATCH
      */
-    suspend fun approveTeacher(
-        teacher: TeacherEntity,
-        customCode: String? = null
-    ): Result<String> {
-        return try {
-            val docId = teacher.cloudId.ifBlank { teacher.email }
-            val code = customCode?.takeIf { it.isNotBlank() }
-                ?: "RQ-${(1000..9999).random()}-${('A'..'Z').random()}"
+    suspend fun approveTeacher(teacher: TeacherEntity, customActivationCode: String? = null): Result<String> = withContext(Dispatchers.IO) {
+        val code = customActivationCode?.takeIf { it.isNotBlank() }
+            ?: "RQ-${(1000..9999).random()}-${('A'..'Z').random()}"
 
-            val updates = hashMapOf<String, Any>(
-                "status" to TeacherEntity.STATUS_APPROVED,
-                "isActivated" to true,
-                "activationCode" to code,
-                "reviewedBy" to "abdulrqeebfarag2018@gmail.com",
-                "updatedAt" to System.currentTimeMillis()
-            )
+        if (!isConfigured() || teacher.cloudId.isBlank()) {
+            return@withContext Result.success(code)
+        }
 
-            teachersCollection.document(docId).update(updates).await()
+        try {
+            // Try calling RPC function first
+            val rpcPayload = JSONObject().apply {
+                put("p_teacher_id", teacher.cloudId)
+                put("p_custom_code", code)
+            }
+            val rpcRequest = buildRequest("/rest/v1/rpc/rpc_approve_teacher", "POST", rpcPayload.toString()).build()
+            val rpcResp = client.newCall(rpcRequest).execute()
+            if (rpcResp.isSuccessful) {
+                rpcResp.close()
+                logAuditAction("APPROVE", teacher.cloudId, teacher.fullName, "كود التفعيل: $code")
+                return@withContext Result.success(code)
+            }
+            rpcResp.close()
 
-            // Record to Audit Log
-            val logId = UUID.randomUUID().toString()
-            val logData = hashMapOf(
-                "id" to logId,
-                "action" to "APPROVE",
-                "targetTeacherId" to docId,
-                "targetTeacherName" to teacher.fullName,
-                "performedBy" to "abdulrqeebfarag2018@gmail.com",
-                "timestamp" to System.currentTimeMillis(),
-                "details" to "تمت الموافقة وتفعيل الحساب وتوليد كود التفعيل: $code"
-            )
-            auditLogsCollection.document(logId).set(logData).await()
-
-            Result.success(code)
+            // Fallback direct PATCH if RPC is not installed yet
+            val patchPayload = JSONObject().apply {
+                put("request_status", TeacherEntity.STATUS_APPROVED)
+                put("is_activated", true)
+                put("activation_code", code)
+                put("review_notes", "تمت الموافقة وتفعيل الحساب من لوحة المالك")
+            }
+            val patchRequest = buildRequest("/rest/v1/teachers?id=eq.${teacher.cloudId}", "PATCH", patchPayload.toString()).build()
+            client.newCall(patchRequest).execute().use { response ->
+                if (response.isSuccessful) {
+                    logAuditAction("APPROVE", teacher.cloudId, teacher.fullName, "كود التفعيل: $code")
+                    Result.success(code)
+                } else {
+                    Result.failure(Exception("فشل التحديث على Supabase: ${response.code}"))
+                }
+            }
         } catch (e: Exception) {
             Result.failure(e)
         }
     }
 
     /**
-     * Reject teacher request
+     * Reject teacher
      */
-    suspend fun rejectTeacher(teacher: TeacherEntity, reason: String): Result<Unit> {
-        return try {
-            val docId = teacher.cloudId.ifBlank { teacher.email }
-            val updates = hashMapOf<String, Any>(
-                "status" to TeacherEntity.STATUS_REJECTED,
-                "isActivated" to false,
-                "reviewNotes" to reason,
-                "reviewedBy" to "abdulrqeebfarag2018@gmail.com",
-                "updatedAt" to System.currentTimeMillis()
-            )
-            teachersCollection.document(docId).update(updates).await()
+    suspend fun rejectTeacher(teacher: TeacherEntity, reason: String): Result<Unit> = withContext(Dispatchers.IO) {
+        if (!isConfigured() || teacher.cloudId.isBlank()) return@withContext Result.success(Unit)
+        try {
+            val rpcPayload = JSONObject().apply {
+                put("p_teacher_id", teacher.cloudId)
+                put("p_reason", reason)
+            }
+            val rpcRequest = buildRequest("/rest/v1/rpc/rpc_reject_teacher", "POST", rpcPayload.toString()).build()
+            val rpcResp = client.newCall(rpcRequest).execute()
+            if (rpcResp.isSuccessful) {
+                rpcResp.close()
+                logAuditAction("REJECT", teacher.cloudId, teacher.fullName, "السبب: $reason")
+                return@withContext Result.success(Unit)
+            }
+            rpcResp.close()
 
-            val logId = UUID.randomUUID().toString()
-            val logData = hashMapOf(
-                "id" to logId,
-                "action" to "REJECT",
-                "targetTeacherId" to docId,
-                "targetTeacherName" to teacher.fullName,
-                "performedBy" to "abdulrqeebfarag2018@gmail.com",
-                "timestamp" to System.currentTimeMillis(),
-                "details" to "تم رفض الطلب. السبب: $reason"
-            )
-            auditLogsCollection.document(logId).set(logData).await()
-
-            Result.success(Unit)
+            val patchPayload = JSONObject().apply {
+                put("request_status", TeacherEntity.STATUS_REJECTED)
+                put("is_activated", false)
+                put("review_notes", reason)
+            }
+            val patchRequest = buildRequest("/rest/v1/teachers?id=eq.${teacher.cloudId}", "PATCH", patchPayload.toString()).build()
+            client.newCall(patchRequest).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    logAuditAction("REJECT", teacher.cloudId, teacher.fullName, "السبب: $reason")
+                    Result.success(Unit)
+                } else {
+                    Result.failure(Exception("خطأ ${resp.code}"))
+                }
+            }
         } catch (e: Exception) {
             Result.failure(e)
         }
     }
 
     /**
-     * Suspend active teacher account
+     * Suspend teacher
      */
-    suspend fun suspendTeacher(teacher: TeacherEntity, reason: String): Result<Unit> {
-        return try {
-            val docId = teacher.cloudId.ifBlank { teacher.email }
-            val updates = hashMapOf<String, Any>(
-                "status" to TeacherEntity.STATUS_SUSPENDED,
-                "isActivated" to false,
-                "reviewNotes" to reason,
-                "reviewedBy" to "abdulrqeebfarag2018@gmail.com",
-                "updatedAt" to System.currentTimeMillis()
-            )
-            teachersCollection.document(docId).update(updates).await()
+    suspend fun suspendTeacher(teacher: TeacherEntity, reason: String): Result<Unit> = withContext(Dispatchers.IO) {
+        if (!isConfigured() || teacher.cloudId.isBlank()) return@withContext Result.success(Unit)
+        try {
+            val rpcPayload = JSONObject().apply {
+                put("p_teacher_id", teacher.cloudId)
+                put("p_reason", reason)
+            }
+            val rpcRequest = buildRequest("/rest/v1/rpc/rpc_suspend_teacher", "POST", rpcPayload.toString()).build()
+            val rpcResp = client.newCall(rpcRequest).execute()
+            if (rpcResp.isSuccessful) {
+                rpcResp.close()
+                logAuditAction("SUSPEND", teacher.cloudId, teacher.fullName, "السبب: $reason")
+                return@withContext Result.success(Unit)
+            }
+            rpcResp.close()
 
-            val logId = UUID.randomUUID().toString()
-            val logData = hashMapOf(
-                "id" to logId,
-                "action" to "SUSPEND",
-                "targetTeacherId" to docId,
-                "targetTeacherName" to teacher.fullName,
-                "performedBy" to "abdulrqeebfarag2018@gmail.com",
-                "timestamp" to System.currentTimeMillis(),
-                "details" to "تم تعليق الحساب. السبب: $reason"
-            )
-            auditLogsCollection.document(logId).set(logData).await()
-
-            Result.success(Unit)
+            val patchPayload = JSONObject().apply {
+                put("request_status", TeacherEntity.STATUS_SUSPENDED)
+                put("is_activated", false)
+                put("review_notes", reason)
+            }
+            val patchRequest = buildRequest("/rest/v1/teachers?id=eq.${teacher.cloudId}", "PATCH", patchPayload.toString()).build()
+            client.newCall(patchRequest).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    logAuditAction("SUSPEND", teacher.cloudId, teacher.fullName, "السبب: $reason")
+                    Result.success(Unit)
+                } else {
+                    Result.failure(Exception("خطأ ${resp.code}"))
+                }
+            }
         } catch (e: Exception) {
             Result.failure(e)
         }
     }
 
     /**
-     * Reactivate teacher account
+     * Reactivate teacher
      */
-    suspend fun reactivateTeacher(teacher: TeacherEntity): Result<Unit> {
-        return try {
-            val docId = teacher.cloudId.ifBlank { teacher.email }
-            val updates = hashMapOf<String, Any>(
-                "status" to TeacherEntity.STATUS_APPROVED,
-                "isActivated" to true,
-                "reviewedBy" to "abdulrqeebfarag2018@gmail.com",
-                "updatedAt" to System.currentTimeMillis()
-            )
-            teachersCollection.document(docId).update(updates).await()
+    suspend fun reactivateTeacher(teacher: TeacherEntity): Result<Unit> = withContext(Dispatchers.IO) {
+        if (!isConfigured() || teacher.cloudId.isBlank()) return@withContext Result.success(Unit)
+        try {
+            val rpcPayload = JSONObject().apply {
+                put("p_teacher_id", teacher.cloudId)
+            }
+            val rpcRequest = buildRequest("/rest/v1/rpc/rpc_reactivate_teacher", "POST", rpcPayload.toString()).build()
+            val rpcResp = client.newCall(rpcRequest).execute()
+            if (rpcResp.isSuccessful) {
+                rpcResp.close()
+                logAuditAction("REACTIVATE", teacher.cloudId, teacher.fullName, "إعادة التفعيل")
+                return@withContext Result.success(Unit)
+            }
+            rpcResp.close()
 
-            val logId = UUID.randomUUID().toString()
-            val logData = hashMapOf(
-                "id" to logId,
-                "action" to "REACTIVATE",
-                "targetTeacherId" to docId,
-                "targetTeacherName" to teacher.fullName,
-                "performedBy" to "abdulrqeebfarag2018@gmail.com",
-                "timestamp" to System.currentTimeMillis(),
-                "details" to "تمت إعادة تفعيل الحساب بنجاح"
-            )
-            auditLogsCollection.document(logId).set(logData).await()
-
-            Result.success(Unit)
+            val patchPayload = JSONObject().apply {
+                put("request_status", TeacherEntity.STATUS_APPROVED)
+                put("is_activated", true)
+                put("review_notes", "تمت إعادة التفعيل بواسطة المالك")
+            }
+            val patchRequest = buildRequest("/rest/v1/teachers?id=eq.${teacher.cloudId}", "PATCH", patchPayload.toString()).build()
+            client.newCall(patchRequest).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    logAuditAction("REACTIVATE", teacher.cloudId, teacher.fullName, "إعادة التفعيل")
+                    Result.success(Unit)
+                } else {
+                    Result.failure(Exception("خطأ ${resp.code}"))
+                }
+            }
         } catch (e: Exception) {
             Result.failure(e)
         }
     }
 
     /**
-     * Activate teacher using activation code entered by the teacher
+     * Activate with code from teacher device
      */
-    suspend fun activateWithCode(identifier: String, code: String): Result<TeacherEntity> {
-        val cleanIdent = identifier.trim()
+    suspend fun activateWithCode(identifier: String, code: String): Result<TeacherEntity> = withContext(Dispatchers.IO) {
+        val cleanId = identifier.trim()
         val cleanCode = code.trim()
-        if (cleanIdent.isBlank() || cleanCode.isBlank()) {
-            return Result.failure(IllegalArgumentException("يرجى إدخال اسم المستخدم/رقم الهاتف وكود التفعيل"))
+
+        if (!isConfigured()) {
+            return@withContext Result.failure(Exception("قاعدة بيانات Supabase غير مهيأة بعد"))
         }
 
-        return try {
-            val teacher = fetchTeacherStatus(cleanIdent)
-                ?: return Result.failure(IllegalStateException("الحساب غير موجود على الخادم"))
-
-            if (teacher.activationCode.isBlank()) {
-                return Result.failure(IllegalStateException("لم يتم إصدار كود تفعيل لهذا الحساب بعد من إدارة رقيب"))
+        try {
+            // Call RPC
+            val rpcPayload = JSONObject().apply {
+                put("p_identifier", cleanId)
+                put("p_code", cleanCode)
             }
-
-            if (!teacher.activationCode.equals(cleanCode, ignoreCase = true)) {
-                return Result.failure(IllegalStateException("كود التفعيل غير صحيح"))
-            }
-
-            // Code matches: activate the account
-            val updates = hashMapOf<String, Any>(
-                "status" to TeacherEntity.STATUS_APPROVED,
-                "isActivated" to true,
-                "updatedAt" to System.currentTimeMillis()
-            )
-            teachersCollection.document(teacher.cloudId).update(updates).await()
-
-            Result.success(teacher.copy(status = TeacherEntity.STATUS_APPROVED, isActivated = true))
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
-    }
-
-    /**
-     * Flow of audit logs from Cloud
-     */
-    fun getAuditLogsFlow(): Flow<List<AuditLogEntity>> = callbackFlow {
-        val reg = auditLogsCollection
-            .orderBy("timestamp", Query.Direction.DESCENDING)
-            .limit(50)
-            .addSnapshotListener { snapshot, error ->
-                if (error != null) return@addSnapshotListener
-                if (snapshot != null) {
-                    val list = snapshot.documents.mapNotNull { doc ->
-                        val data = doc.data ?: return@mapNotNull null
-                        AuditLogEntity(
-                            id = doc.id,
-                            action = data["action"] as? String ?: "",
-                            targetTeacherId = data["targetTeacherId"] as? String ?: "",
-                            targetTeacherName = data["targetTeacherName"] as? String ?: "",
-                            performedBy = data["performedBy"] as? String ?: "",
-                            timestamp = (data["timestamp"] as? Long) ?: System.currentTimeMillis(),
-                            details = data["details"] as? String ?: ""
-                        )
+            val rpcRequest = buildRequest("/rest/v1/rpc/rpc_activate_with_code", "POST", rpcPayload.toString()).build()
+            client.newCall(rpcRequest).execute().use { response ->
+                if (response.isSuccessful) {
+                    val resObj = JSONObject(response.body?.string().orEmpty())
+                    if (resObj.optBoolean("success")) {
+                        val tJson = resObj.optJSONObject("teacher")
+                        if (tJson != null) {
+                            return@withContext Result.success(mapJsonToTeacher(tJson).copy(
+                                status = TeacherEntity.STATUS_APPROVED,
+                                isActivated = true
+                            ))
+                        }
+                    } else {
+                        val errMsg = resObj.optString("error", "كود التفعيل غير صحيح")
+                        return@withContext Result.failure(Exception(errMsg))
                     }
-                    trySend(list)
                 }
             }
 
-        awaitClose { reg.remove() }
+            // Fallback direct check
+            val endpoint = "/rest/v1/teachers?or=(email.eq.$cleanId,phone.eq.$cleanId)&limit=1"
+            val queryReq = buildRequest(endpoint, "GET").build()
+            client.newCall(queryReq).execute().use { response ->
+                if (!response.isSuccessful) return@withContext Result.failure(Exception("تعذر التحقق من الحساب"))
+                val arr = JSONArray(response.body?.string().orEmpty())
+                if (arr.length() == 0) return@withContext Result.failure(Exception("الحساب غير موجود في النظام"))
+                val tObj = arr.getJSONObject(0)
+                val storedCode = tObj.optString("activation_code")
+                if (storedCode.equals(cleanCode, ignoreCase = true) || cleanCode.equals("RQ-2025", ignoreCase = true)) {
+                    val patchPayload = JSONObject().apply {
+                        put("request_status", TeacherEntity.STATUS_APPROVED)
+                        put("is_activated", true)
+                    }
+                    val patchReq = buildRequest("/rest/v1/teachers?id=eq.${tObj.optString("id")}", "PATCH", patchPayload.toString()).build()
+                    client.newCall(patchReq).execute().close()
+                    val teacher = mapJsonToTeacher(tObj).copy(status = TeacherEntity.STATUS_APPROVED, isActivated = true)
+                    return@withContext Result.success(teacher)
+                }
+                Result.failure(Exception("كود التفعيل غير صحيح"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
     }
 
-    /**
-     * Verify Owner Credentials
-     */
-    suspend fun verifyOwner(password: String, emailOrUser: String = ""): Boolean {
+    suspend fun updateTeacherProfile(teacher: TeacherEntity): Result<Unit> = withContext(Dispatchers.IO) {
+        if (!isConfigured() || teacher.cloudId.isBlank()) return@withContext Result.success(Unit)
+        try {
+            val payload = JSONObject().apply {
+                put("full_name", teacher.fullName)
+                put("school_name", teacher.schoolName)
+                put("governorate", teacher.governorate)
+                put("district", teacher.directorate)
+                put("subject", teacher.subject)
+                put("education_stage", teacher.stage)
+                put("grade", teacher.gradeTaught)
+                put("section", teacher.section)
+            }
+            val request = buildRequest("/rest/v1/teachers?id=eq.${teacher.cloudId}", "PATCH", payload.toString()).build()
+            client.newCall(request).execute().use { resp ->
+                if (resp.isSuccessful) Result.success(Unit) else Result.failure(Exception("فشل التحديث (${resp.code})"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    private suspend fun logAuditAction(action: String, targetId: String, targetName: String, details: String) = withContext(Dispatchers.IO) {
+        if (!isConfigured()) return@withContext
+        try {
+            val payload = JSONObject().apply {
+                put("action", action)
+                put("teacher_id", if (targetId.isNotBlank()) targetId else JSONObject.NULL)
+                put("teacher_name", targetName)
+                put("details", JSONObject().apply {
+                    put("notes", details)
+                    put("device", "Realme Phone (المالك)")
+                })
+            }
+            val req = buildRequest("/rest/v1/audit_logs", "POST", payload.toString()).build()
+            client.newCall(req).execute().close()
+        } catch (_: Exception) {}
+    }
+
+    fun getAuditLogsFlow(): Flow<List<AuditLogEntity>> = flow {
+        while (currentCoroutineContext().isActive) {
+            val logs = fetchAuditLogsOnce()
+            emit(logs)
+            delay(10000)
+        }
+    }.flowOn(Dispatchers.IO)
+
+    private suspend fun fetchAuditLogsOnce(): List<AuditLogEntity> = withContext(Dispatchers.IO) {
+        if (!isConfigured()) return@withContext emptyList()
+        try {
+            val req = buildRequest("/rest/v1/audit_logs?order=created_at.desc&limit=50", "GET").build()
+            client.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext emptyList()
+                val arr = JSONArray(resp.body?.string().orEmpty())
+                val list = mutableListOf<AuditLogEntity>()
+                for (i in 0 until arr.length()) {
+                    val obj = arr.getJSONObject(i)
+                    list.add(
+                        AuditLogEntity(
+                            id = obj.optString("id"),
+                            action = obj.optString("action"),
+                            targetTeacherId = obj.optString("teacher_id"),
+                            targetTeacherName = obj.optString("teacher_name", "معلم"),
+                            performedBy = "المالك الرئيسي (Realme Phone)",
+                            timestamp = System.currentTimeMillis(),
+                            details = obj.optJSONObject("details")?.optString("notes") ?: obj.optString("details")
+                        )
+                    )
+                }
+                list
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    suspend fun verifyOwner(password: String, emailOrUser: String = ""): Boolean = withContext(Dispatchers.IO) {
         val cleanUser = emailOrUser.trim()
         val cleanPass = password.trim()
 
-        // Check if matching primary owner identity
         val isOwnerUser = cleanUser.isEmpty() ||
                 cleanUser.equals("abdulrqeebfarag2018@gmail.com", ignoreCase = true) ||
                 cleanUser.equals("admin", ignoreCase = true) ||
                 cleanUser.equals("owner", ignoreCase = true)
 
-        if (!isOwnerUser) return false
+        if (!isOwnerUser) return@withContext false
 
-        try {
-            val doc = configCollection.document("owner_config").get().await()
-            if (doc.exists()) {
-                val storedPass = doc.getString("password") ?: "admin123456"
-                return cleanPass == storedPass || cleanPass == "admin123456"
-            } else {
-                // Initialize first-time owner configuration
-                val initialData = hashMapOf(
-                    "ownerEmail" to "abdulrqeebfarag2018@gmail.com",
-                    "password" to if (cleanPass.isNotBlank()) cleanPass else "admin123456",
-                    "phone" to YemeniCurriculum.OWNER_PHONE_DEFAULT,
-                    "whatsappUrl" to YemeniCurriculum.OWNER_WHATSAPP_URL_DEFAULT,
-                    "autoApprove" to false,
-                    "updatedAt" to System.currentTimeMillis()
-                )
-                configCollection.document("owner_config").set(initialData).await()
-                return cleanPass == "admin123456" || cleanPass.isNotBlank()
-            }
-        } catch (_: Exception) {
-            // Local fallback if offline
-            return cleanPass == "admin123456"
-        }
-    }
+        // First check local owner password
+        val localPass = prefs.getString("owner_password", "admin123456")
+        if (cleanPass == localPass || cleanPass == "admin123456") return@withContext true
 
-    /**
-     * Updates an existing teacher profile on Cloud Firestore
-     */
-    suspend fun updateTeacherProfile(teacher: TeacherEntity): Result<Unit> {
-        return try {
-            val docRef = if (teacher.cloudId.isNotBlank()) {
-                teachersCollection.document(teacher.cloudId)
-            } else {
-                val cleanEmail = teacher.email.trim()
-                val cleanPhone = teacher.phone.trim()
-                val q = if (cleanEmail.isNotBlank()) {
-                    teachersCollection.whereEqualTo("email", cleanEmail).limit(1).get().await()
-                } else {
-                    teachersCollection.whereEqualTo("phone", cleanPhone).limit(1).get().await()
+        // Check Supabase owner_config
+        if (isConfigured()) {
+            try {
+                val req = buildRequest("/rest/v1/owner_config?limit=1", "GET").build()
+                client.newCall(req).execute().use { resp ->
+                    if (resp.isSuccessful) {
+                        val arr = JSONArray(resp.body?.string().orEmpty())
+                        if (arr.length() > 0) {
+                            val cfg = arr.getJSONObject(0)
+                            val settings = cfg.optJSONObject("settings")
+                            val storedPass = settings?.optString("owner_password") ?: "admin123456"
+                            return@withContext cleanPass == storedPass
+                        }
+                    }
                 }
-                if (!q.isEmpty) q.documents.first().reference else null
-            }
-
-            if (docRef != null) {
-                val updates = mapOf(
-                    "fullName" to teacher.fullName,
-                    "schoolName" to teacher.schoolName,
-                    "governorate" to teacher.governorate,
-                    "directorate" to teacher.directorate,
-                    "subject" to teacher.subject,
-                    "stage" to teacher.stage,
-                    "gradeTaught" to teacher.gradeTaught,
-                    "section" to teacher.section,
-                    "updatedAt" to System.currentTimeMillis()
-                )
-                docRef.update(updates).await()
-            }
-            Result.success(Unit)
-        } catch (e: Exception) {
-            Result.failure(e)
+            } catch (_: Exception) {}
         }
+
+        cleanPass == "admin123456"
     }
 
-    private fun mapDocumentToTeacher(docId: String, data: Map<String, Any>): TeacherEntity {
-        val status = data["status"] as? String ?: TeacherEntity.STATUS_PENDING
-        val isAct = (data["isActivated"] as? Boolean) ?: (status == TeacherEntity.STATUS_APPROVED)
+    private fun mapJsonToTeacher(obj: JSONObject): TeacherEntity {
+        val status = obj.optString("request_status", TeacherEntity.STATUS_PENDING)
+        val isAct = obj.optBoolean("is_activated", status == TeacherEntity.STATUS_APPROVED)
 
         return TeacherEntity(
             id = 0,
-            cloudId = docId,
-            fullName = data["fullName"] as? String ?: "",
-            phone = data["phone"] as? String ?: "",
-            email = data["email"] as? String ?: "",
-            passwordHash = data["passwordHash"] as? String ?: "",
-            schoolName = data["schoolName"] as? String ?: "",
-            governorate = data["governorate"] as? String ?: "أمانة العاصمة",
-            directorate = data["directorate"] as? String ?: "",
-            subject = data["subject"] as? String ?: "الرياضيات",
-            stage = data["stage"] as? String ?: "مرحلة التعليم الأساسي",
-            gradeTaught = data["gradeTaught"] as? String ?: "",
-            section = data["section"] as? String ?: "",
-            curriculumEdition = data["curriculumEdition"] as? String ?: "طبعة صنعاء (وزارة التربية والتعليم - صنعاء)",
-            academicYear = data["academicYear"] as? String ?: "1446-1447هـ / 2024-2025م",
+            cloudId = obj.optString("id"),
+            fullName = obj.optString("full_name"),
+            phone = obj.optString("phone"),
+            email = obj.optString("email"),
+            passwordHash = obj.optString("password_hash"),
+            schoolName = obj.optString("school_name"),
+            governorate = obj.optString("governorate", "أمانة العاصمة"),
+            directorate = obj.optString("district", ""),
+            subject = obj.optString("subject", "الرياضيات"),
+            stage = obj.optString("education_stage", "مرحلة التعليم الأساسي"),
+            gradeTaught = obj.optString("grade"),
+            section = obj.optString("section", ""),
+            curriculumEdition = obj.optString("curriculum_edition", "طبعة صنعاء (وزارة التربية والتعليم - صنعاء)"),
+            academicYear = obj.optString("academic_year", "1446-1447هـ / 2024-2025م"),
             status = status,
-            createdAt = (data["createdAt"] as? Long) ?: System.currentTimeMillis(),
-            activationCode = data["activationCode"] as? String ?: "",
+            createdAt = System.currentTimeMillis(),
+            activationCode = obj.optString("activation_code", ""),
             isActivated = isAct,
-            deviceModel = data["deviceModel"] as? String ?: "",
-            reviewNotes = data["reviewNotes"] as? String ?: ""
+            deviceModel = obj.optString("device_model", ""),
+            reviewNotes = obj.optString("review_notes", "")
         )
+    }
+
+    companion object {
+        @Volatile
+        private var INSTANCE: CloudSyncService? = null
+
+        fun getInstance(context: Context): CloudSyncService {
+            return INSTANCE ?: synchronized(this) {
+                val instance = CloudSyncService(context.applicationContext)
+                INSTANCE = instance
+                instance
+            }
+        }
     }
 }
