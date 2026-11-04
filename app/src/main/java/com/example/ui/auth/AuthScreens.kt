@@ -5,9 +5,11 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.draw.clip
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -104,10 +106,10 @@ fun AuthScreen(
                     contentAlignment = Alignment.Center
                 ) {
                     Image(
-                        painter = painterResource(id = R.drawable.rqeeb_logo),
-                        contentDescription = "شعار رقيب",
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier.fillMaxSize()
+                        painter = painterResource(id = R.drawable.img_app_logo),
+                        contentDescription = "شعار رقيب المعلم الذكي",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize().clip(CircleShape)
                     )
                 }
             }
@@ -164,6 +166,7 @@ fun AuthScreen(
             } else {
                 TeacherRegisterForm(
                     repository = repository,
+                    onTeacherLoggedIn = onTeacherLoggedIn,
                     onRegistered = { selectedTab = 0 },
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -477,7 +480,7 @@ fun TeacherLoginForm(
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Text(
-                        "أدخل البريد أو رقم الهاتف المسجل به، وكود التفعيل الممنوح لك من مالك النظام (مثال: RQ-8492-X):",
+                        "أدخل البريد أو رقم الهاتف المسجل به، وكود التفعيل الممنوح لك من مالك النظام:",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -499,8 +502,7 @@ fun TeacherLoginForm(
                             activationCodeInput = it.uppercase()
                             activationMessage = null
                         },
-                        label = { Text("كود التفعيل (مثال: RQ-8492-X)") },
-                        placeholder = { Text("RQ-XXXX-X") },
+                        label = { Text("كود التفعيل") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth().testTag("activation_code_input")
                     )
@@ -594,9 +596,11 @@ fun TeacherLoginForm(
 @Composable
 fun TeacherRegisterForm(
     repository: RqeebRepository,
+    onTeacherLoggedIn: (TeacherEntity) -> Unit,
     onRegistered: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     var fullName by remember { mutableStateOf("") }
     var phone by remember { mutableStateOf("") }
@@ -611,16 +615,40 @@ fun TeacherRegisterForm(
     var curriculumEdition by remember { mutableStateOf("طبعة صنعاء (وزارة التربية والتعليم - صنعاء)") }
     var password by remember { mutableStateOf("") }
     var confirmPassword by remember { mutableStateOf("") }
+    var activationCodeInput by remember { mutableStateOf("") }
     var termsAccepted by remember { mutableStateOf(false) }
 
     var passwordVisible by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var successMessage by remember { mutableStateOf<String?>(null) }
-    var isLoading by remember { mutableStateOf(false) }
+    var isActivatingCode by remember { mutableStateOf(false) }
 
     var govExpanded by remember { mutableStateOf(false) }
     var editionExpanded by remember { mutableStateOf(false) }
     var gradeExpanded by remember { mutableStateOf(false) }
+
+    fun validateForm(): Boolean {
+        if (fullName.isBlank() || phone.isBlank() || email.isBlank() ||
+            schoolName.isBlank() || subject.isBlank() || password.isBlank()
+        ) {
+            errorMessage = "يرجى تعبئة كافة الحقول الإلزامية (*)"
+            return false
+        }
+        if (password != confirmPassword) {
+            errorMessage = "كلمتا المرور غير متطابقتين"
+            return false
+        }
+        if (password.length < 6) {
+            errorMessage = "يجب ألا تقل كلمة المرور عن 6 أحرف"
+            return false
+        }
+        if (!termsAccepted) {
+            errorMessage = "يرجى الموافقة على الشروط للمتابعة"
+            return false
+        }
+        errorMessage = null
+        return true
+    }
 
     Card(
         modifier = modifier,
@@ -755,7 +783,7 @@ fun TeacherRegisterForm(
                 }
             }
 
-            // Subject and Grade (Using 12 official display names)
+            // Subject and Grade
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value = subject,
@@ -801,7 +829,7 @@ fun TeacherRegisterForm(
                 OutlinedTextField(
                     value = password,
                     onValueChange = { password = it; errorMessage = null },
-                    label = { Text("كلمة المرور *") },
+                    label = { Text("كلمة المرور (للدخول لاحقاً) *") },
                     visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                     singleLine = true,
@@ -835,6 +863,140 @@ fun TeacherRegisterForm(
                 )
             }
 
+            // WhatsApp Subscription & Activation Section
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        "خطوات الاشتراك وتفعيل الحساب:",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+
+                    // Button 1: Send Subscription Request via WhatsApp
+                    Button(
+                        onClick = {
+                            if (!validateForm()) return@Button
+                            coroutineScope.launch {
+                                val newTeacher = TeacherEntity(
+                                    fullName = fullName.trim(),
+                                    phone = phone.trim(),
+                                    email = email.trim(),
+                                    passwordHash = password,
+                                    schoolName = schoolName.trim(),
+                                    governorate = governorate.trim(),
+                                    directorate = directorate.trim(),
+                                    subject = subject.trim(),
+                                    stage = stage,
+                                    gradeTaught = gradeTaught,
+                                    section = section,
+                                    curriculumEdition = curriculumEdition,
+                                    deviceModel = "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}".trim()
+                                )
+                                // Save profile in local DB
+                                repository.registerTeacher(newTeacher)
+
+                                // Open WhatsApp with subscription text
+                                val msg = "السلام عليكم ورحمة الله، أنا المعلم: ${fullName.trim()}، رقم الهاتف: ${phone.trim()}، المدرسة: ${schoolName.trim()} ($governorate)، المادة: ${subject.trim()} - $gradeTaught. أرغب في الاشتراك بـ «رقيب – مساعد المعلم الذكي» وتفعيل حسابي. يرجى إرسال كود التفعيل."
+                                ContactUtils.openOwnerWhatsApp(context, msg)
+
+                                successMessage = "تم فتح الواتساب لإرسال طلب الاشتراك. أدخل كود التفعيل المستلم من الإدارة في الخانة أدناه واضغط (تفعيل الحساب والدخول للتطبيق)."
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF25D366)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(46.dp)
+                            .testTag("whatsapp_subscription_button")
+                    ) {
+                        Icon(Icons.Default.Chat, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("إرسال طلب الاشتراك عبر الواتساب", color = Color.White, fontWeight = FontWeight.Bold)
+                    }
+
+                    // Activation Code Input & Activation Button
+                    OutlinedTextField(
+                        value = activationCodeInput,
+                        onValueChange = {
+                            activationCodeInput = it.uppercase()
+                            errorMessage = null
+                        },
+                        label = { Text("أدخل كود التفعيل المستلم") },
+                        singleLine = true,
+                        leadingIcon = { Icon(Icons.Default.VpnKey, contentDescription = null) },
+                        modifier = Modifier.fillMaxWidth().testTag("reg_activation_code_input")
+                    )
+
+                    Button(
+                        onClick = {
+                            if (!validateForm()) return@Button
+                            if (activationCodeInput.isBlank()) {
+                                errorMessage = "يرجى إدخال كود التفعيل أولاً"
+                                return@Button
+                            }
+                            isActivatingCode = true
+                            coroutineScope.launch {
+                                // 1. Save or update teacher entity
+                                val newTeacher = TeacherEntity(
+                                    fullName = fullName.trim(),
+                                    phone = phone.trim(),
+                                    email = email.trim(),
+                                    passwordHash = password,
+                                    schoolName = schoolName.trim(),
+                                    governorate = governorate.trim(),
+                                    directorate = directorate.trim(),
+                                    subject = subject.trim(),
+                                    stage = stage,
+                                    gradeTaught = gradeTaught,
+                                    section = section,
+                                    curriculumEdition = curriculumEdition,
+                                    deviceModel = "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}".trim()
+                                )
+                                repository.registerTeacher(newTeacher)
+
+                                // 2. Activate with code
+                                val (ok, msg) = repository.activateWithCode(
+                                    phone.trim().ifBlank { email.trim() },
+                                    activationCodeInput.trim()
+                                )
+                                isActivatingCode = false
+                                if (ok) {
+                                    val activeTeacher = repository.getTeacherByLogin(phone.trim().ifBlank { email.trim() })
+                                    if (activeTeacher != null) {
+                                        onTeacherLoggedIn(activeTeacher)
+                                    } else {
+                                        successMessage = "تم التفعيل بنجاح! يرجى تسجيل الدخول بكود/هاتفك وكلمة المرور."
+                                        onRegistered()
+                                    }
+                                } else {
+                                    errorMessage = msg
+                                }
+                            }
+                        },
+                        enabled = !isActivatingCode,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(46.dp)
+                            .testTag("activate_code_login_button")
+                    ) {
+                        if (isActivatingCode) {
+                            CircularProgressIndicator(modifier = Modifier.size(18.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
+                        } else {
+                            Icon(Icons.Default.Verified, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("تفعيل الحساب والدخول للتطبيق", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+
             if (errorMessage != null) {
                 Text(text = errorMessage!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             }
@@ -848,67 +1010,6 @@ fun TeacherRegisterForm(
                         modifier = Modifier.padding(10.dp),
                         textAlign = TextAlign.Center
                     )
-                }
-            }
-
-            Button(
-                onClick = {
-                    if (fullName.isBlank() || phone.isBlank() || email.isBlank() ||
-                        schoolName.isBlank() || subject.isBlank() || password.isBlank()
-                    ) {
-                        errorMessage = "يرجى تعبئة كافة الحقول الإلزامية (*)"
-                        return@Button
-                    }
-                    if (password != confirmPassword) {
-                        errorMessage = "كلمتا المرور غير متطابقتين"
-                        return@Button
-                    }
-                    if (password.length < 6) {
-                        errorMessage = "يجب ألا تقل كلمة المرور عن 6 أحرف"
-                        return@Button
-                    }
-                    if (!termsAccepted) {
-                        errorMessage = "يرجى الموافقة على الشروط للمتابعة"
-                        return@Button
-                    }
-
-                    isLoading = true
-                    coroutineScope.launch {
-                        val newTeacher = TeacherEntity(
-                            fullName = fullName.trim(),
-                            phone = phone.trim(),
-                            email = email.trim(),
-                            passwordHash = password,
-                            schoolName = schoolName.trim(),
-                            governorate = governorate.trim(),
-                            directorate = directorate.trim(),
-                            subject = subject.trim(),
-                            stage = stage,
-                            gradeTaught = gradeTaught,
-                            section = section,
-                            curriculumEdition = curriculumEdition,
-                            deviceModel = "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}".trim()
-                        )
-                        val (success, message) = repository.registerTeacher(newTeacher)
-                        isLoading = false
-                        if (success) {
-                            successMessage = message
-                            onRegistered()
-                        } else {
-                            errorMessage = message
-                        }
-                    }
-                },
-                enabled = !isLoading,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(50.dp)
-                    .testTag("submit_registration_button")
-            ) {
-                if (isLoading) {
-                    CircularProgressIndicator(modifier = Modifier.size(20.dp), color = MaterialTheme.colorScheme.onPrimary)
-                } else {
-                    Text("إرسال طلب الانضمام", fontWeight = FontWeight.Bold)
                 }
             }
         }

@@ -5,7 +5,10 @@ import android.os.Build
 import com.example.BuildConfig
 import com.example.data.model.AuditLogEntity
 import com.example.data.model.TeacherEntity
-import com.example.data.model.YemeniCurriculum
+import com.example.data.model.EducationalResourceEntity
+import com.example.data.model.AppAnnouncementEntity
+import com.example.data.model.AppDynamicContentEntity
+import com.example.data.model.ActivationCodeEntity
 import com.example.util.RqeebNotificationHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
@@ -73,6 +76,12 @@ class CloudSyncService(private val context: Context) {
             .apply()
     }
 
+    fun getOwnerPin(): String = prefs.getString("owner_pin", "").orEmpty()
+
+    fun saveOwnerPin(pin: String) {
+        prefs.edit().putString("owner_pin", pin.trim()).apply()
+    }
+
     fun isConfigured(): Boolean {
         val url = getSupabaseUrl()
         val key = getSupabaseAnonKey()
@@ -111,14 +120,14 @@ class CloudSyncService(private val context: Context) {
             return@withContext Pair(false, "إعدادات Supabase غير مكتملة. يرجى إدخال عنوان المشروع ومفتاح anon.")
         }
         try {
-            val request = buildRequest("/rest/v1/teachers?limit=1", "GET").build()
+            val request = buildRequest("/rest/v1/owner_config?limit=1", "GET").build()
             client.newCall(request).execute().use { response ->
                 if (response.isSuccessful) {
                     Pair(true, "تم الاتصال بنجاح بقاعدة بيانات Supabase (PostgreSQL)")
                 } else {
                     val code = response.code
                     val msg = response.body?.string() ?: response.message
-                    Pair(false, "فشل الاتصال بخادم Supabase (رمز $code): $msg")
+                    Pair(false, "فحص الخادم (رمز $code): $msg")
                 }
             }
         } catch (e: Exception) {
@@ -151,7 +160,6 @@ class CloudSyncService(private val context: Context) {
                 put("academic_year", teacher.academicYear)
                 put("request_status", TeacherEntity.STATUS_PENDING)
                 put("is_activated", false)
-                put("activation_code", "")
                 put("device_model", deviceName)
                 put("review_notes", "")
             }
@@ -160,8 +168,8 @@ class CloudSyncService(private val context: Context) {
             client.newCall(request).execute().use { response ->
                 val responseStr = response.body?.string().orEmpty()
                 if (response.isSuccessful) {
-                    val jsonArray = JSONArray(responseStr)
-                    val inserted = jsonArray.optJSONObject(0)
+                    val jsonArray = try { JSONArray(responseStr) } catch (_: Exception) { null }
+                    val inserted = jsonArray?.optJSONObject(0)
                     val cloudId = inserted?.optString("id").orEmpty()
                     Result.success(if (cloudId.isNotBlank()) cloudId else "sb-${System.currentTimeMillis()}")
                 } else {
@@ -174,21 +182,22 @@ class CloudSyncService(private val context: Context) {
     }
 
     /**
-     * Fetch status for a teacher by email or phone
+     * Fetch status for a teacher by email or phone securely via RPC
      */
     suspend fun fetchTeacherStatus(identifier: String): TeacherEntity? = withContext(Dispatchers.IO) {
         val clean = identifier.trim()
         if (clean.isBlank() || !isConfigured()) return@withContext null
 
         try {
-            val endpoint = "/rest/v1/teachers?or=(email.eq.$clean,phone.eq.$clean)&limit=1"
-            val request = buildRequest(endpoint, "GET").build()
+            val rpcPayload = JSONObject().apply {
+                put("p_identifier", clean)
+            }
+            val request = buildRequest("/rest/v1/rpc/rpc_get_teacher_by_login", "POST", rpcPayload.toString()).build()
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) return@withContext null
                 val str = response.body?.string().orEmpty()
-                val array = JSONArray(str)
-                if (array.length() > 0) {
-                    val obj = array.getJSONObject(0)
+                if (str.isNotBlank() && str != "null") {
+                    val obj = JSONObject(str)
                     return@withContext mapJsonToTeacher(obj)
                 }
                 null
@@ -219,12 +228,15 @@ class CloudSyncService(private val context: Context) {
     }.flowOn(Dispatchers.IO)
 
     /**
-     * Fetch all teachers once from Supabase
+     * Fetch all teachers for owner via secure RPC
      */
     suspend fun fetchAllTeachersOnce(): List<TeacherEntity> = withContext(Dispatchers.IO) {
         if (!isConfigured()) return@withContext emptyList()
         try {
-            val request = buildRequest("/rest/v1/teachers?order=created_at.desc", "GET").build()
+            val rpcPayload = JSONObject().apply {
+                put("p_owner_pin", getOwnerPin())
+            }
+            val request = buildRequest("/rest/v1/rpc/rpc_get_all_teachers_for_owner", "POST", rpcPayload.toString()).build()
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) return@withContext emptyList()
                 val str = response.body?.string().orEmpty()
@@ -242,7 +254,7 @@ class CloudSyncService(private val context: Context) {
     }
 
     /**
-     * Approve Teacher via Supabase RPC or direct PATCH
+     * Approve Teacher via Supabase RPC
      */
     suspend fun approveTeacher(teacher: TeacherEntity, customActivationCode: String? = null): Result<String> = withContext(Dispatchers.IO) {
         val code = customActivationCode?.takeIf { it.isNotBlank() }
@@ -253,34 +265,26 @@ class CloudSyncService(private val context: Context) {
         }
 
         try {
-            // Try calling RPC function first
             val rpcPayload = JSONObject().apply {
                 put("p_teacher_id", teacher.cloudId)
                 put("p_custom_code", code)
+                put("p_owner_pin", getOwnerPin())
             }
             val rpcRequest = buildRequest("/rest/v1/rpc/rpc_approve_teacher", "POST", rpcPayload.toString()).build()
-            val rpcResp = client.newCall(rpcRequest).execute()
-            if (rpcResp.isSuccessful) {
-                rpcResp.close()
-                logAuditAction("APPROVE", teacher.cloudId, teacher.fullName, "كود التفعيل: $code")
-                return@withContext Result.success(code)
-            }
-            rpcResp.close()
-
-            // Fallback direct PATCH if RPC is not installed yet
-            val patchPayload = JSONObject().apply {
-                put("request_status", TeacherEntity.STATUS_APPROVED)
-                put("is_activated", true)
-                put("activation_code", code)
-                put("review_notes", "تمت الموافقة وتفعيل الحساب من لوحة المالك")
-            }
-            val patchRequest = buildRequest("/rest/v1/teachers?id=eq.${teacher.cloudId}", "PATCH", patchPayload.toString()).build()
-            client.newCall(patchRequest).execute().use { response ->
+            client.newCall(rpcRequest).execute().use { response ->
+                val bodyStr = response.body?.string().orEmpty()
                 if (response.isSuccessful) {
-                    logAuditAction("APPROVE", teacher.cloudId, teacher.fullName, "كود التفعيل: $code")
-                    Result.success(code)
+                    val resObj = JSONObject(bodyStr)
+                    if (resObj.optBoolean("success")) {
+                        val returnedCode = resObj.optString("code", code)
+                        logAuditAction("APPROVE", teacher.cloudId, teacher.fullName, "كود التفعيل: $returnedCode")
+                        Result.success(returnedCode)
+                    } else {
+                        val error = resObj.optString("error", "فشلت عملية الموافقة")
+                        Result.failure(Exception(error))
+                    }
                 } else {
-                    Result.failure(Exception("فشل التحديث على Supabase: ${response.code}"))
+                    Result.failure(Exception("خطأ من خادم Supabase (${response.code}): $bodyStr"))
                 }
             }
         } catch (e: Exception) {
@@ -289,7 +293,7 @@ class CloudSyncService(private val context: Context) {
     }
 
     /**
-     * Reject teacher
+     * Reject teacher via Supabase RPC
      */
     suspend fun rejectTeacher(teacher: TeacherEntity, reason: String): Result<Unit> = withContext(Dispatchers.IO) {
         if (!isConfigured() || teacher.cloudId.isBlank()) return@withContext Result.success(Unit)
@@ -297,28 +301,21 @@ class CloudSyncService(private val context: Context) {
             val rpcPayload = JSONObject().apply {
                 put("p_teacher_id", teacher.cloudId)
                 put("p_reason", reason)
+                put("p_owner_pin", getOwnerPin())
             }
             val rpcRequest = buildRequest("/rest/v1/rpc/rpc_reject_teacher", "POST", rpcPayload.toString()).build()
-            val rpcResp = client.newCall(rpcRequest).execute()
-            if (rpcResp.isSuccessful) {
-                rpcResp.close()
-                logAuditAction("REJECT", teacher.cloudId, teacher.fullName, "السبب: $reason")
-                return@withContext Result.success(Unit)
-            }
-            rpcResp.close()
-
-            val patchPayload = JSONObject().apply {
-                put("request_status", TeacherEntity.STATUS_REJECTED)
-                put("is_activated", false)
-                put("review_notes", reason)
-            }
-            val patchRequest = buildRequest("/rest/v1/teachers?id=eq.${teacher.cloudId}", "PATCH", patchPayload.toString()).build()
-            client.newCall(patchRequest).execute().use { resp ->
-                if (resp.isSuccessful) {
-                    logAuditAction("REJECT", teacher.cloudId, teacher.fullName, "السبب: $reason")
-                    Result.success(Unit)
+            client.newCall(rpcRequest).execute().use { response ->
+                val bodyStr = response.body?.string().orEmpty()
+                if (response.isSuccessful) {
+                    val resObj = JSONObject(bodyStr)
+                    if (resObj.optBoolean("success")) {
+                        logAuditAction("REJECT", teacher.cloudId, teacher.fullName, "السبب: $reason")
+                        Result.success(Unit)
+                    } else {
+                        Result.failure(Exception(resObj.optString("error", "فشلت العملية")))
+                    }
                 } else {
-                    Result.failure(Exception("خطأ ${resp.code}"))
+                    Result.failure(Exception("خطأ ${response.code}: $bodyStr"))
                 }
             }
         } catch (e: Exception) {
@@ -327,7 +324,7 @@ class CloudSyncService(private val context: Context) {
     }
 
     /**
-     * Suspend teacher
+     * Suspend teacher via Supabase RPC
      */
     suspend fun suspendTeacher(teacher: TeacherEntity, reason: String): Result<Unit> = withContext(Dispatchers.IO) {
         if (!isConfigured() || teacher.cloudId.isBlank()) return@withContext Result.success(Unit)
@@ -335,28 +332,21 @@ class CloudSyncService(private val context: Context) {
             val rpcPayload = JSONObject().apply {
                 put("p_teacher_id", teacher.cloudId)
                 put("p_reason", reason)
+                put("p_owner_pin", getOwnerPin())
             }
             val rpcRequest = buildRequest("/rest/v1/rpc/rpc_suspend_teacher", "POST", rpcPayload.toString()).build()
-            val rpcResp = client.newCall(rpcRequest).execute()
-            if (rpcResp.isSuccessful) {
-                rpcResp.close()
-                logAuditAction("SUSPEND", teacher.cloudId, teacher.fullName, "السبب: $reason")
-                return@withContext Result.success(Unit)
-            }
-            rpcResp.close()
-
-            val patchPayload = JSONObject().apply {
-                put("request_status", TeacherEntity.STATUS_SUSPENDED)
-                put("is_activated", false)
-                put("review_notes", reason)
-            }
-            val patchRequest = buildRequest("/rest/v1/teachers?id=eq.${teacher.cloudId}", "PATCH", patchPayload.toString()).build()
-            client.newCall(patchRequest).execute().use { resp ->
-                if (resp.isSuccessful) {
-                    logAuditAction("SUSPEND", teacher.cloudId, teacher.fullName, "السبب: $reason")
-                    Result.success(Unit)
+            client.newCall(rpcRequest).execute().use { response ->
+                val bodyStr = response.body?.string().orEmpty()
+                if (response.isSuccessful) {
+                    val resObj = JSONObject(bodyStr)
+                    if (resObj.optBoolean("success")) {
+                        logAuditAction("SUSPEND", teacher.cloudId, teacher.fullName, "السبب: $reason")
+                        Result.success(Unit)
+                    } else {
+                        Result.failure(Exception(resObj.optString("error", "فشلت العملية")))
+                    }
                 } else {
-                    Result.failure(Exception("خطأ ${resp.code}"))
+                    Result.failure(Exception("خطأ ${response.code}: $bodyStr"))
                 }
             }
         } catch (e: Exception) {
@@ -365,35 +355,28 @@ class CloudSyncService(private val context: Context) {
     }
 
     /**
-     * Reactivate teacher
+     * Reactivate teacher via Supabase RPC
      */
     suspend fun reactivateTeacher(teacher: TeacherEntity): Result<Unit> = withContext(Dispatchers.IO) {
         if (!isConfigured() || teacher.cloudId.isBlank()) return@withContext Result.success(Unit)
         try {
             val rpcPayload = JSONObject().apply {
                 put("p_teacher_id", teacher.cloudId)
+                put("p_owner_pin", getOwnerPin())
             }
             val rpcRequest = buildRequest("/rest/v1/rpc/rpc_reactivate_teacher", "POST", rpcPayload.toString()).build()
-            val rpcResp = client.newCall(rpcRequest).execute()
-            if (rpcResp.isSuccessful) {
-                rpcResp.close()
-                logAuditAction("REACTIVATE", teacher.cloudId, teacher.fullName, "إعادة التفعيل")
-                return@withContext Result.success(Unit)
-            }
-            rpcResp.close()
-
-            val patchPayload = JSONObject().apply {
-                put("request_status", TeacherEntity.STATUS_APPROVED)
-                put("is_activated", true)
-                put("review_notes", "تمت إعادة التفعيل بواسطة المالك")
-            }
-            val patchRequest = buildRequest("/rest/v1/teachers?id=eq.${teacher.cloudId}", "PATCH", patchPayload.toString()).build()
-            client.newCall(patchRequest).execute().use { resp ->
-                if (resp.isSuccessful) {
-                    logAuditAction("REACTIVATE", teacher.cloudId, teacher.fullName, "إعادة التفعيل")
-                    Result.success(Unit)
+            client.newCall(rpcRequest).execute().use { response ->
+                val bodyStr = response.body?.string().orEmpty()
+                if (response.isSuccessful) {
+                    val resObj = JSONObject(bodyStr)
+                    if (resObj.optBoolean("success")) {
+                        logAuditAction("REACTIVATE", teacher.cloudId, teacher.fullName, "إعادة التفعيل")
+                        Result.success(Unit)
+                    } else {
+                        Result.failure(Exception(resObj.optString("error", "فشلت العملية")))
+                    }
                 } else {
-                    Result.failure(Exception("خطأ ${resp.code}"))
+                    Result.failure(Exception("خطأ ${response.code}: $bodyStr"))
                 }
             }
         } catch (e: Exception) {
@@ -402,26 +385,26 @@ class CloudSyncService(private val context: Context) {
     }
 
     /**
-     * Activate with code from teacher device
+     * Activate with code exclusively via atomic RPC
      */
     suspend fun activateWithCode(identifier: String, code: String): Result<TeacherEntity> = withContext(Dispatchers.IO) {
         val cleanId = identifier.trim()
-        val cleanCode = code.trim()
+        val cleanCode = code.trim().uppercase()
 
         if (!isConfigured()) {
             return@withContext Result.failure(Exception("قاعدة بيانات Supabase غير مهيأة بعد"))
         }
 
         try {
-            // Call RPC
             val rpcPayload = JSONObject().apply {
                 put("p_identifier", cleanId)
                 put("p_code", cleanCode)
             }
             val rpcRequest = buildRequest("/rest/v1/rpc/rpc_activate_with_code", "POST", rpcPayload.toString()).build()
             client.newCall(rpcRequest).execute().use { response ->
+                val bodyStr = response.body?.string().orEmpty()
                 if (response.isSuccessful) {
-                    val resObj = JSONObject(response.body?.string().orEmpty())
+                    val resObj = JSONObject(bodyStr)
                     if (resObj.optBoolean("success")) {
                         val tJson = resObj.optJSONObject("teacher")
                         if (tJson != null) {
@@ -431,33 +414,14 @@ class CloudSyncService(private val context: Context) {
                             ))
                         }
                     } else {
-                        val errMsg = resObj.optString("error", "كود التفعيل غير صحيح")
+                        val errMsg = resObj.optString("error", "كود التفعيل غير صحيح أو منتهي الصلاحية")
                         return@withContext Result.failure(Exception(errMsg))
                     }
+                } else {
+                    return@withContext Result.failure(Exception("خطأ من الخادم (${response.code}): $bodyStr"))
                 }
             }
-
-            // Fallback direct check
-            val endpoint = "/rest/v1/teachers?or=(email.eq.$cleanId,phone.eq.$cleanId)&limit=1"
-            val queryReq = buildRequest(endpoint, "GET").build()
-            client.newCall(queryReq).execute().use { response ->
-                if (!response.isSuccessful) return@withContext Result.failure(Exception("تعذر التحقق من الحساب"))
-                val arr = JSONArray(response.body?.string().orEmpty())
-                if (arr.length() == 0) return@withContext Result.failure(Exception("الحساب غير موجود في النظام"))
-                val tObj = arr.getJSONObject(0)
-                val storedCode = tObj.optString("activation_code")
-                if (storedCode.equals(cleanCode, ignoreCase = true) || cleanCode.equals("RQ-2025", ignoreCase = true)) {
-                    val patchPayload = JSONObject().apply {
-                        put("request_status", TeacherEntity.STATUS_APPROVED)
-                        put("is_activated", true)
-                    }
-                    val patchReq = buildRequest("/rest/v1/teachers?id=eq.${tObj.optString("id")}", "PATCH", patchPayload.toString()).build()
-                    client.newCall(patchReq).execute().close()
-                    val teacher = mapJsonToTeacher(tObj).copy(status = TeacherEntity.STATUS_APPROVED, isActivated = true)
-                    return@withContext Result.success(teacher)
-                }
-                Result.failure(Exception("كود التفعيل غير صحيح"))
-            }
+            Result.failure(Exception("تعذر تفعيل الحساب"))
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -539,9 +503,14 @@ class CloudSyncService(private val context: Context) {
         }
     }
 
+    /**
+     * Verify owner credentials securely against server RPC
+     */
     suspend fun verifyOwner(password: String, emailOrUser: String = ""): Boolean = withContext(Dispatchers.IO) {
         val cleanUser = emailOrUser.trim()
         val cleanPass = password.trim()
+
+        if (cleanPass.length < 6) return@withContext false
 
         val isOwnerUser = cleanUser.isEmpty() ||
                 cleanUser.equals("abdulrqeebfarag2018@gmail.com", ignoreCase = true) ||
@@ -550,34 +519,41 @@ class CloudSyncService(private val context: Context) {
 
         if (!isOwnerUser) return@withContext false
 
-        // First check local owner password
-        val localPass = prefs.getString("owner_password", "admin123456")
-        if (cleanPass == localPass || cleanPass == "admin123456") return@withContext true
-
-        // Check Supabase owner_config
+        // Check against Supabase server RPC
         if (isConfigured()) {
             try {
-                val req = buildRequest("/rest/v1/owner_config?limit=1", "GET").build()
+                val rpcPayload = JSONObject().apply {
+                    put("p_password", cleanPass)
+                    put("p_email", "abdulrqeebfarag2018@gmail.com")
+                }
+                val req = buildRequest("/rest/v1/rpc/rpc_verify_owner", "POST", rpcPayload.toString()).build()
                 client.newCall(req).execute().use { resp ->
                     if (resp.isSuccessful) {
-                        val arr = JSONArray(resp.body?.string().orEmpty())
-                        if (arr.length() > 0) {
-                            val cfg = arr.getJSONObject(0)
-                            val settings = cfg.optJSONObject("settings")
-                            val storedPass = settings?.optString("owner_password") ?: "admin123456"
-                            return@withContext cleanPass == storedPass
+                        val obj = JSONObject(resp.body?.string().orEmpty())
+                        val verified = obj.optBoolean("verified", false)
+                        if (verified) {
+                            saveOwnerPin(cleanPass)
+                            return@withContext true
                         }
                     }
                 }
             } catch (_: Exception) {}
         }
 
-        cleanPass == "admin123456"
+        // Local verification fallback when offline if PIN was previously saved
+        val storedPin = getOwnerPin()
+        if (storedPin.isNotBlank()) {
+            cleanPass == storedPin
+        } else {
+            // First time local save
+            saveOwnerPin(cleanPass)
+            true
+        }
     }
 
     private fun mapJsonToTeacher(obj: JSONObject): TeacherEntity {
         val status = obj.optString("request_status", TeacherEntity.STATUS_PENDING)
-        val isAct = obj.optBoolean("is_activated", status == TeacherEntity.STATUS_APPROVED)
+        val isAct = obj.optBoolean("is_activated", false)
 
         return TeacherEntity(
             id = 0,
@@ -602,6 +578,604 @@ class CloudSyncService(private val context: Context) {
             deviceModel = obj.optString("device_model", ""),
             reviewNotes = obj.optString("review_notes", "")
         )
+    }
+
+    /**
+     * Add Teacher Manually from Owner Dashboard
+     */
+    suspend fun addTeacherManually(
+        fullName: String,
+        phone: String,
+        schoolName: String,
+        governorate: String,
+        district: String,
+        subject: String,
+        stage: String,
+        grade: String,
+        section: String,
+        curriculumEdition: String
+    ): Result<Pair<String, String>> = withContext(Dispatchers.IO) {
+        if (!isConfigured()) return@withContext Result.failure(Exception("قاعدة بيانات Supabase غير مهيأة"))
+        try {
+            val payload = JSONObject().apply {
+                put("p_full_name", fullName.trim())
+                put("p_phone", phone.trim())
+                put("p_school_name", schoolName.trim())
+                put("p_governorate", governorate.trim())
+                put("p_district", district.trim())
+                put("p_subject", subject.trim())
+                put("p_stage", stage.trim())
+                put("p_grade", grade.trim())
+                put("p_section", section.trim())
+                put("p_curriculum_edition", curriculumEdition.trim())
+                put("p_owner_pin", getOwnerPin())
+            }
+            val request = buildRequest("/rest/v1/rpc/rpc_add_teacher_manual", "POST", payload.toString()).build()
+            client.newCall(request).execute().use { response ->
+                val bodyStr = response.body?.string().orEmpty()
+                if (response.isSuccessful) {
+                    val obj = JSONObject(bodyStr)
+                    if (obj.optBoolean("success")) {
+                        val teacherId = obj.optString("teacher_id")
+                        val code = obj.optString("code")
+                        Result.success(Pair(teacherId, code))
+                    } else {
+                        Result.failure(Exception(obj.optString("error", "فشلت إضافة المعلم")))
+                    }
+                } else {
+                    Result.failure(Exception("خطأ من الخادم (${response.code}): $bodyStr"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Update Teacher Manually
+     */
+    suspend fun updateTeacherManually(teacher: TeacherEntity): Result<Unit> = withContext(Dispatchers.IO) {
+        if (!isConfigured() || teacher.cloudId.isBlank()) return@withContext Result.success(Unit)
+        try {
+            val payload = JSONObject().apply {
+                put("p_teacher_id", teacher.cloudId)
+                put("p_full_name", teacher.fullName)
+                put("p_phone", teacher.phone)
+                put("p_school_name", teacher.schoolName)
+                put("p_governorate", teacher.governorate)
+                put("p_district", teacher.directorate)
+                put("p_subject", teacher.subject)
+                put("p_stage", teacher.stage)
+                put("p_grade", teacher.gradeTaught)
+                put("p_section", teacher.section)
+                put("p_curriculum_edition", teacher.curriculumEdition)
+                put("p_owner_pin", getOwnerPin())
+            }
+            val request = buildRequest("/rest/v1/rpc/rpc_update_teacher_manual", "POST", payload.toString()).build()
+            client.newCall(request).execute().use { resp ->
+                val body = resp.body?.string().orEmpty()
+                if (resp.isSuccessful) {
+                    val obj = JSONObject(body)
+                    if (obj.optBoolean("success")) Result.success(Unit)
+                    else Result.failure(Exception(obj.optString("error", "فشل التحديث")))
+                } else {
+                    Result.failure(Exception("خطأ ${resp.code}: $body"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Delete Teacher Manually
+     */
+    suspend fun deleteTeacherManually(cloudId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        if (!isConfigured() || cloudId.isBlank()) return@withContext Result.success(Unit)
+        try {
+            val payload = JSONObject().apply {
+                put("p_teacher_id", cloudId)
+                put("p_owner_pin", getOwnerPin())
+            }
+            val request = buildRequest("/rest/v1/rpc/rpc_delete_teacher_manual", "POST", payload.toString()).build()
+            client.newCall(request).execute().use { resp ->
+                val body = resp.body?.string().orEmpty()
+                if (resp.isSuccessful) {
+                    val obj = JSONObject(body)
+                    if (obj.optBoolean("success")) Result.success(Unit)
+                    else Result.failure(Exception(obj.optString("error", "فشل الحذف")))
+                } else {
+                    Result.failure(Exception("خطأ ${resp.code}: $body"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Generate Batch of Activation Codes (e.g. 100 codes)
+     */
+    suspend fun generateBatchCodes(count: Int = 100, prefix: String = "RQ"): Result<Int> = withContext(Dispatchers.IO) {
+        if (!isConfigured()) return@withContext Result.failure(Exception("قاعدة بيانات Supabase غير مهيأة"))
+        try {
+            val payload = JSONObject().apply {
+                put("p_count", count)
+                put("p_prefix", prefix)
+                put("p_owner_pin", getOwnerPin())
+            }
+            val request = buildRequest("/rest/v1/rpc/rpc_generate_batch_codes", "POST", payload.toString()).build()
+            client.newCall(request).execute().use { resp ->
+                val body = resp.body?.string().orEmpty()
+                if (resp.isSuccessful) {
+                    val obj = JSONObject(body)
+                    if (obj.optBoolean("success")) {
+                        Result.success(obj.optInt("generated_count", count))
+                    } else {
+                        Result.failure(Exception(obj.optString("error", "فشل توليد الأكواد")))
+                    }
+                } else {
+                    Result.failure(Exception("خطأ ${resp.code}: $body"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Create a single custom activation code for a specific teacher with custom duration
+     */
+    suspend fun createSingleActivationCode(
+        teacherName: String,
+        teacherPhone: String,
+        durationDays: Int = 365,
+        customCode: String? = null
+    ): Result<ActivationCodeEntity> = withContext(Dispatchers.IO) {
+        if (!isConfigured()) return@withContext Result.failure(Exception("قاعدة بيانات Supabase غير مهيأة بعد"))
+        try {
+            val payload = JSONObject().apply {
+                put("p_teacher_name", teacherName.trim())
+                put("p_teacher_phone", teacherPhone.trim())
+                put("p_duration_days", durationDays)
+                if (!customCode.isNullOrBlank()) {
+                    put("p_custom_code", customCode.trim().uppercase())
+                }
+                put("p_owner_pin", getOwnerPin())
+            }
+            val request = buildRequest("/rest/v1/rpc/rpc_create_activation_code", "POST", payload.toString()).build()
+            client.newCall(request).execute().use { resp ->
+                val body = resp.body?.string().orEmpty()
+                if (resp.isSuccessful) {
+                    val obj = JSONObject(body)
+                    if (obj.optBoolean("success")) {
+                        val entity = ActivationCodeEntity(
+                            id = obj.optString("id", java.util.UUID.randomUUID().toString()),
+                            code = obj.optString("code"),
+                            teacherId = null,
+                            teacherName = obj.optString("teacher_name", teacherName.trim()),
+                            teacherPhone = obj.optString("teacher_phone", teacherPhone.trim()),
+                            durationDays = obj.optInt("duration_days", durationDays),
+                            isUsed = false,
+                            isRevoked = false,
+                            revokedReason = "",
+                            status = "AVAILABLE",
+                            createdAt = System.currentTimeMillis(),
+                            usedAt = null,
+                            expiresAt = System.currentTimeMillis() + (durationDays * 24L * 3600 * 1000)
+                        )
+                        Result.success(entity)
+                    } else {
+                        Result.failure(Exception(obj.optString("error", "فشل إنشاء كود التفعيل")))
+                    }
+                } else {
+                    Result.failure(Exception("خطأ الخادم (${resp.code}): $body"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Seed the 100 official activation codes (T001 - T100) directly to Supabase cloud
+     */
+    suspend fun seedOfficial100CodesToCloud(): Result<Int> = withContext(Dispatchers.IO) {
+        if (!isConfigured()) return@withContext Result.failure(Exception("قاعدة بيانات Supabase غير مهيأة بعد"))
+        try {
+            val payload = JSONObject().apply {
+                put("p_owner_pin", getOwnerPin())
+            }
+            val request = buildRequest("/rest/v1/rpc/rpc_seed_official_100_codes", "POST", payload.toString()).build()
+            client.newCall(request).execute().use { resp ->
+                val body = resp.body?.string().orEmpty()
+                if (resp.isSuccessful) {
+                    val obj = JSONObject(body)
+                    if (obj.optBoolean("success")) {
+                        Result.success(obj.optInt("count", 100))
+                    } else {
+                        Result.failure(Exception(obj.optString("error", "فشل تثبيت الأكواد السحابية")))
+                    }
+                } else {
+                    Result.failure(Exception("خطأ الخادم (${resp.code}): $body"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Fetch All Activation Codes for Owner with full Result
+     */
+    suspend fun fetchAllActivationCodesResult(): Result<List<ActivationCodeEntity>> = withContext(Dispatchers.IO) {
+        if (!isConfigured()) return@withContext Result.failure(Exception("قاعدة بيانات Supabase غير مهيأة بعد"))
+        try {
+            val payload = JSONObject().apply {
+                put("p_owner_pin", getOwnerPin())
+            }
+            val request = buildRequest("/rest/v1/rpc/rpc_get_all_activation_codes", "POST", payload.toString()).build()
+            client.newCall(request).execute().use { resp ->
+                val body = resp.body?.string().orEmpty()
+                if (!resp.isSuccessful) {
+                    return@withContext Result.failure(Exception("خطأ الخادم (${resp.code}): $body"))
+                }
+                val arr = JSONArray(body)
+                val list = mutableListOf<ActivationCodeEntity>()
+                val now = System.currentTimeMillis()
+                for (i in 0 until arr.length()) {
+                    val o = arr.getJSONObject(i)
+                    val days = o.optInt("duration_days", 365)
+                    list.add(
+                        ActivationCodeEntity(
+                            id = o.optString("id"),
+                            code = o.optString("code"),
+                            teacherId = o.optString("teacher_id").takeIf { it.isNotBlank() && it != "null" },
+                            teacherName = o.optString("teacher_name", "كود عام متاح"),
+                            teacherPhone = o.optString("teacher_phone", ""),
+                            durationDays = days,
+                            isUsed = o.optBoolean("is_used", false),
+                            isRevoked = o.optBoolean("is_revoked", false),
+                            revokedReason = o.optString("revoked_reason", ""),
+                            status = o.optString("status", "AVAILABLE"),
+                            createdAt = now - (i * 1000L),
+                            expiresAt = now + (days * 24L * 3600 * 1000)
+                        )
+                    )
+                }
+                Result.success(list)
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Fetch All Activation Codes for Owner (backward-compatible list)
+     */
+    suspend fun fetchAllActivationCodes(): List<ActivationCodeEntity> = withContext(Dispatchers.IO) {
+        fetchAllActivationCodesResult().getOrDefault(emptyList())
+    }
+
+    /**
+     * Revoke Activation Code
+     */
+    suspend fun revokeActivationCode(codeId: String, reason: String): Result<Unit> = withContext(Dispatchers.IO) {
+        if (!isConfigured()) return@withContext Result.failure(Exception("قاعدة بيانات Supabase غير مهيأة"))
+        try {
+            val payload = JSONObject().apply {
+                put("p_code_id", codeId)
+                put("p_reason", reason)
+                put("p_owner_pin", getOwnerPin())
+            }
+            val request = buildRequest("/rest/v1/rpc/rpc_revoke_activation_code", "POST", payload.toString()).build()
+            client.newCall(request).execute().use { resp ->
+                val body = resp.body?.string().orEmpty()
+                if (resp.isSuccessful) {
+                    val obj = JSONObject(body)
+                    if (obj.optBoolean("success")) Result.success(Unit)
+                    else Result.failure(Exception(obj.optString("error", "فشل إلغاء الكود")))
+                } else {
+                    Result.failure(Exception("خطأ ${resp.code}: $body"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Reissue Activation Code for Teacher
+     */
+    suspend fun reissueActivationCode(teacherCloudId: String): Result<String> = withContext(Dispatchers.IO) {
+        if (!isConfigured()) return@withContext Result.failure(Exception("قاعدة بيانات Supabase غير مهيأة"))
+        try {
+            val payload = JSONObject().apply {
+                put("p_teacher_id", teacherCloudId)
+                put("p_owner_pin", getOwnerPin())
+            }
+            val request = buildRequest("/rest/v1/rpc/rpc_reissue_activation_code", "POST", payload.toString()).build()
+            client.newCall(request).execute().use { resp ->
+                val body = resp.body?.string().orEmpty()
+                if (resp.isSuccessful) {
+                    val obj = JSONObject(body)
+                    if (obj.optBoolean("success")) Result.success(obj.optString("code"))
+                    else Result.failure(Exception(obj.optString("error", "فشل إصدار كود بديل")))
+                } else {
+                    Result.failure(Exception("خطأ ${resp.code}: $body"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Fetch Educational Resources
+     */
+    suspend fun fetchEducationalResources(grade: String? = null, subject: String? = null): List<EducationalResourceEntity> = withContext(Dispatchers.IO) {
+        if (!isConfigured()) return@withContext emptyList()
+        try {
+            val payload = JSONObject().apply {
+                if (!grade.isNullOrBlank() && grade != "الكل") put("p_grade", grade)
+                if (!subject.isNullOrBlank() && subject != "الكل") put("p_subject", subject)
+            }
+            val req = buildRequest("/rest/v1/rpc/rpc_get_educational_resources", "POST", payload.toString()).build()
+            client.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext emptyList()
+                val arr = JSONArray(resp.body?.string().orEmpty())
+                val list = mutableListOf<EducationalResourceEntity>()
+                for (i in 0 until arr.length()) {
+                    val o = arr.getJSONObject(i)
+                    list.add(
+                        EducationalResourceEntity(
+                            id = 0,
+                            cloudId = o.optString("id"),
+                            title = o.optString("title"),
+                            description = o.optString("description", ""),
+                            resourceType = o.optString("resource_type", "PDF"),
+                            subject = o.optString("subject", "الرياضيات"),
+                            grade = o.optString("grade", "عام"),
+                            unitName = o.optString("unit_name", ""),
+                            lessonName = o.optString("lesson_name", ""),
+                            fileUrl = o.optString("file_url", ""),
+                            fileSizeBytes = o.optLong("file_size_bytes", 0L),
+                            isPublic = o.optBoolean("is_public", true),
+                            createdAt = System.currentTimeMillis()
+                        )
+                    )
+                }
+                list
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    /**
+     * Save Educational Resource
+     */
+    suspend fun saveEducationalResource(res: EducationalResourceEntity): Result<Unit> = withContext(Dispatchers.IO) {
+        if (!isConfigured()) return@withContext Result.failure(Exception("قاعدة بيانات Supabase غير مهيأة"))
+        try {
+            val payload = JSONObject().apply {
+                if (res.cloudId.isNotBlank()) put("p_id", res.cloudId)
+                put("p_title", res.title)
+                put("p_description", res.description)
+                put("p_resource_type", res.resourceType)
+                put("p_subject", res.subject)
+                put("p_grade", res.grade)
+                put("p_unit_name", res.unitName)
+                put("p_lesson_name", res.lessonName)
+                put("p_file_url", res.fileUrl)
+                put("p_file_size_bytes", res.fileSizeBytes)
+                put("p_is_public", res.isPublic)
+                put("p_owner_pin", getOwnerPin())
+            }
+            val req = buildRequest("/rest/v1/rpc/rpc_add_or_update_resource", "POST", payload.toString()).build()
+            client.newCall(req).execute().use { resp ->
+                val body = resp.body?.string().orEmpty()
+                if (resp.isSuccessful) {
+                    val obj = JSONObject(body)
+                    if (obj.optBoolean("success")) Result.success(Unit)
+                    else Result.failure(Exception(obj.optString("error", "فشل الحفظ")))
+                } else {
+                    Result.failure(Exception("خطأ ${resp.code}: $body"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Delete Educational Resource
+     */
+    suspend fun deleteEducationalResource(cloudId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        if (!isConfigured() || cloudId.isBlank()) return@withContext Result.success(Unit)
+        try {
+            val payload = JSONObject().apply {
+                put("p_resource_id", cloudId)
+                put("p_owner_pin", getOwnerPin())
+            }
+            val req = buildRequest("/rest/v1/rpc/rpc_delete_resource", "POST", payload.toString()).build()
+            client.newCall(req).execute().use { resp ->
+                val body = resp.body?.string().orEmpty()
+                if (resp.isSuccessful) {
+                    val obj = JSONObject(body)
+                    if (obj.optBoolean("success")) Result.success(Unit)
+                    else Result.failure(Exception(obj.optString("error", "فشل الحذف")))
+                } else {
+                    Result.failure(Exception("خطأ ${resp.code}: $body"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Fetch Announcements
+     */
+    suspend fun fetchAnnouncements(grade: String = "ALL", subject: String = "ALL"): List<AppAnnouncementEntity> = withContext(Dispatchers.IO) {
+        if (!isConfigured()) return@withContext emptyList()
+        try {
+            val payload = JSONObject().apply {
+                put("p_grade", grade)
+                put("p_subject", subject)
+            }
+            val req = buildRequest("/rest/v1/rpc/rpc_get_app_announcements", "POST", payload.toString()).build()
+            client.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext emptyList()
+                val arr = JSONArray(resp.body?.string().orEmpty())
+                val list = mutableListOf<AppAnnouncementEntity>()
+                for (i in 0 until arr.length()) {
+                    val o = arr.getJSONObject(i)
+                    list.add(
+                        AppAnnouncementEntity(
+                            id = 0,
+                            cloudId = o.optString("id"),
+                            title = o.optString("title"),
+                            content = o.optString("content"),
+                            type = o.optString("type", "BANNER"),
+                            targetGrade = o.optString("target_grade", "ALL"),
+                            targetSubject = o.optString("target_subject", "ALL"),
+                            isActive = o.optBoolean("is_active", true),
+                            priority = o.optInt("priority", 0),
+                            linkUrl = o.optString("link_url", ""),
+                            createdAt = System.currentTimeMillis()
+                        )
+                    )
+                }
+                list
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    /**
+     * Save Announcement
+     */
+    suspend fun saveAnnouncement(ann: AppAnnouncementEntity): Result<Unit> = withContext(Dispatchers.IO) {
+        if (!isConfigured()) return@withContext Result.failure(Exception("قاعدة بيانات Supabase غير مهيأة"))
+        try {
+            val payload = JSONObject().apply {
+                if (ann.cloudId.isNotBlank()) put("p_id", ann.cloudId)
+                put("p_title", ann.title)
+                put("p_content", ann.content)
+                put("p_type", ann.type)
+                put("p_target_grade", ann.targetGrade)
+                put("p_target_subject", ann.targetSubject)
+                put("p_is_active", ann.isActive)
+                put("p_priority", ann.priority)
+                put("p_link_url", ann.linkUrl)
+                put("p_owner_pin", getOwnerPin())
+            }
+            val req = buildRequest("/rest/v1/rpc/rpc_add_or_update_announcement", "POST", payload.toString()).build()
+            client.newCall(req).execute().use { resp ->
+                val body = resp.body?.string().orEmpty()
+                if (resp.isSuccessful) {
+                    val obj = JSONObject(body)
+                    if (obj.optBoolean("success")) Result.success(Unit)
+                    else Result.failure(Exception(obj.optString("error", "فشل الحفظ")))
+                } else {
+                    Result.failure(Exception("خطأ ${resp.code}: $body"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Delete Announcement
+     */
+    suspend fun deleteAnnouncement(cloudId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        if (!isConfigured() || cloudId.isBlank()) return@withContext Result.success(Unit)
+        try {
+            val payload = JSONObject().apply {
+                put("p_announcement_id", cloudId)
+                put("p_owner_pin", getOwnerPin())
+            }
+            val req = buildRequest("/rest/v1/rpc/rpc_delete_announcement", "POST", payload.toString()).build()
+            client.newCall(req).execute().use { resp ->
+                val body = resp.body?.string().orEmpty()
+                if (resp.isSuccessful) {
+                    val obj = JSONObject(body)
+                    if (obj.optBoolean("success")) Result.success(Unit)
+                    else Result.failure(Exception(obj.optString("error", "فشل الحذف")))
+                } else {
+                    Result.failure(Exception("خطأ ${resp.code}: $body"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Fetch Dynamic Content
+     */
+    suspend fun fetchDynamicContent(category: String? = null): List<AppDynamicContentEntity> = withContext(Dispatchers.IO) {
+        if (!isConfigured()) return@withContext emptyList()
+        try {
+            val payload = JSONObject().apply {
+                if (!category.isNullOrBlank()) put("p_category", category)
+            }
+            val req = buildRequest("/rest/v1/rpc/rpc_get_dynamic_content", "POST", payload.toString()).build()
+            client.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext emptyList()
+                val arr = JSONArray(resp.body?.string().orEmpty())
+                val list = mutableListOf<AppDynamicContentEntity>()
+                for (i in 0 until arr.length()) {
+                    val o = arr.getJSONObject(i)
+                    list.add(
+                        AppDynamicContentEntity(
+                            contentKey = o.optString("content_key"),
+                            category = o.optString("category", "GENERAL"),
+                            title = o.optString("title", ""),
+                            contentValue = o.optString("content_value", ""),
+                            isActive = o.optBoolean("is_active", true),
+                            updatedAt = System.currentTimeMillis()
+                        )
+                    )
+                }
+                list
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    /**
+     * Save Dynamic Content
+     */
+    suspend fun saveDynamicContent(content: AppDynamicContentEntity): Result<Unit> = withContext(Dispatchers.IO) {
+        if (!isConfigured()) return@withContext Result.failure(Exception("قاعدة بيانات Supabase غير مهيأة"))
+        try {
+            val payload = JSONObject().apply {
+                put("p_key", content.contentKey)
+                put("p_category", content.category)
+                put("p_title", content.title)
+                put("p_value", content.contentValue)
+                put("p_is_active", content.isActive)
+                put("p_owner_pin", getOwnerPin())
+            }
+            val req = buildRequest("/rest/v1/rpc/rpc_add_or_update_dynamic_content", "POST", payload.toString()).build()
+            client.newCall(req).execute().use { resp ->
+                val body = resp.body?.string().orEmpty()
+                if (resp.isSuccessful) {
+                    val obj = JSONObject(body)
+                    if (obj.optBoolean("success")) Result.success(Unit)
+                    else Result.failure(Exception(obj.optString("error", "فشل الحفظ")))
+                } else {
+                    Result.failure(Exception("خطأ ${resp.code}: $body"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
     }
 
     companion object {

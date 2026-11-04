@@ -30,10 +30,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.data.ai.GeminiService
+import com.example.data.model.AppAnnouncementEntity
 import com.example.data.model.TeacherEntity
 import com.example.data.model.YemeniCurriculum
 import com.example.data.repository.RqeebRepository
 import com.example.util.ContactUtils
+import kotlinx.coroutines.launch
 
 enum class TeacherSection {
     LESSON_PREP,
@@ -43,6 +45,7 @@ enum class TeacherSection {
     TIMETABLE,
     HOMEWORK,
     STUDENT_GRADES,
+    STUDENT_FOLLOWUP,
     TERM_PLAN,
     AI_TOOLS,
     LESSON_ARCHIVE,
@@ -70,8 +73,11 @@ fun TeacherDashboard(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     var currentSection by remember { mutableStateOf<TeacherSection?>(null) }
     var activeTeacher by remember { mutableStateOf(teacher) }
+    val activeAnnouncements by repository.getActiveAnnouncementsFlow().collectAsState(initial = emptyList())
+    var selectedAnnouncementToShow by remember { mutableStateOf<AppAnnouncementEntity?>(null) }
 
     if (currentSection != null) {
         when (currentSection!!) {
@@ -125,6 +131,14 @@ fun TeacherDashboard(
                     onBack = { currentSection = null }
                 )
             }
+            TeacherSection.STUDENT_FOLLOWUP -> {
+                StudentFollowUpScreen(
+                    teacher = activeTeacher,
+                    repository = repository,
+                    geminiService = geminiService,
+                    onBack = { currentSection = null }
+                )
+            }
             TeacherSection.TERM_PLAN -> {
                 TermPlanScreen(
                     teacher = activeTeacher,
@@ -133,8 +147,9 @@ fun TeacherDashboard(
                 )
             }
             TeacherSection.AI_TOOLS -> {
-                AiToolsScreen(
+                SmartExplanationScreen(
                     teacher = activeTeacher,
+                    repository = repository,
                     geminiService = geminiService,
                     onBack = { currentSection = null }
                 )
@@ -181,10 +196,11 @@ fun TeacherDashboard(
         DashboardItem(TeacherSection.PRIMARY_MATH, "رياضيات الابتدائية", "شرح تفاعلي للحمل والاستلاف (1-6)", Icons.Default.Calculate, Color(0xFFD97706)),
         DashboardItem(TeacherSection.LIBRARY, "المكتبة التعليمية", "المناهج والكتب والوحدات اليمنية", Icons.AutoMirrored.Filled.MenuBook, Color(0xFF0D9488)),
         DashboardItem(TeacherSection.STUDENT_GRADES, "كشف الدرجات والطلاب", "سجل أعمال السنة والملاحظات", Icons.Default.Grade, Color(0xFF8B5CF6)),
+        DashboardItem(TeacherSection.STUDENT_FOLLOWUP, "متابعة الطالب وولي الأمر", "تقارير، درجات، حافز وتواصل واتساب", Icons.Default.Chat, Color(0xFF25D366)),
         DashboardItem(TeacherSection.TIMETABLE, "الجدول الأسبوعي", "توزيع الحصص والصفوف", Icons.Default.CalendarMonth, Color(0xFF2563EB)),
         DashboardItem(TeacherSection.HOMEWORK, "الواجبات المنزلية", "التكليفات وتوثيق التمارين", Icons.Default.Assignment, Color(0xFF059669)),
         DashboardItem(TeacherSection.TERM_PLAN, "الخطة الفصلية", "التوزيع الزمني للمقرر الدراسي", Icons.Default.ViewTimeline, Color(0xFF4F46E5)),
-        DashboardItem(TeacherSection.AI_TOOLS, "المساعد الذكي (AI)", "صياغة الأهداف والأنشطة والوسائل", Icons.Default.AutoAwesome, Color(0xFFEC4899)),
+        DashboardItem(TeacherSection.AI_TOOLS, "الشرح الذكي (المساعد التربوي)", "شرح عميق، أمثلة يمنية وتشبيهات وطرق تدريس", Icons.Default.AutoAwesome, Color(0xFF7C3AED)),
         DashboardItem(TeacherSection.LESSON_ARCHIVE, "أرشيف الدروس", "سجل التحضيرات المحفوظة", Icons.Default.Folder, Color(0xFF64748B)),
         DashboardItem(TeacherSection.ORAL_EXAMS, "الاختبارات الشفوية", "تقييم التلاوة والمطالعة الشفوية", Icons.Default.RecordVoiceOver, Color(0xFFE11D48)),
         DashboardItem(TeacherSection.STATS, "الإحصائيات والتقارير", "بيانات الإنجاز والمتابعة", Icons.Default.BarChart, Color(0xFF10B981)),
@@ -203,12 +219,12 @@ fun TeacherDashboard(
                             modifier = Modifier.size(36.dp)
                         ) {
                             Image(
-                                painter = painterResource(id = R.drawable.rqeeb_logo),
-                                contentDescription = "شعار رقيب",
-                                contentScale = ContentScale.Fit,
+                                painter = painterResource(id = R.drawable.img_app_logo),
+                                contentDescription = "شعار رقيب المعلم الذكي",
+                                contentScale = ContentScale.Crop,
                                 modifier = Modifier
                                     .fillMaxSize()
-                                    .padding(2.dp)
+                                    .clip(CircleShape)
                             )
                         }
                         Spacer(modifier = Modifier.width(10.dp))
@@ -229,7 +245,16 @@ fun TeacherDashboard(
                 },
                 actions = {
                     IconButton(
-                        onClick = { ContactUtils.openOwnerWhatsApp(context) },
+                        onClick = {
+                            coroutineScope.launch {
+                                val supportPhone = repository.getDynamicContentValue("support_whatsapp", YemeniCurriculum.OWNER_PHONE_DEFAULT)
+                                ContactUtils.openTeacherWhatsApp(
+                                    context,
+                                    supportPhone,
+                                    "مرحباً إدارة تطبيق «رقيب – مساعد المعلم الذكي»، أنا الأستاذ ${activeTeacher.fullName}، أحتاج لمساعدة فنية."
+                                )
+                            }
+                        },
                         modifier = Modifier.testTag("whatsapp_support_button")
                     ) {
                         Icon(
@@ -338,6 +363,58 @@ fun TeacherDashboard(
 
             Spacer(modifier = Modifier.height(10.dp))
 
+            // Active Announcement Banner (if any)
+            if (activeAnnouncements.isNotEmpty()) {
+                val topAnnouncement = activeAnnouncements.first()
+                val isUrgent = topAnnouncement.priority > 0 || topAnnouncement.type == "POPUP"
+                Card(
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (isUrgent) MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.8f)
+                        else MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.85f)
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { selectedAnnouncementToShow = topAnnouncement }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = if (isUrgent) Icons.Default.Warning else Icons.Default.Campaign,
+                            contentDescription = null,
+                            tint = if (isUrgent) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                topAnnouncement.title,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp,
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                            )
+                            Text(
+                                topAnnouncement.content,
+                                fontSize = 11.sp,
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        TextButton(
+                            onClick = { selectedAnnouncementToShow = topAnnouncement },
+                            contentPadding = PaddingValues(horizontal = 8.dp)
+                        ) {
+                            Text("عرض", fontSize = 11.sp)
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+            }
+
             // Grid of Hub Modules
             LazyVerticalGrid(
                 columns = GridCells.Fixed(2),
@@ -393,5 +470,47 @@ fun TeacherDashboard(
                 }
             }
         }
+    }
+
+    if (selectedAnnouncementToShow != null) {
+        val ann = selectedAnnouncementToShow!!
+        AlertDialog(
+            onDismissRequest = { selectedAnnouncementToShow = null },
+            icon = {
+                Icon(
+                    Icons.Default.Campaign,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(32.dp)
+                )
+            },
+            title = {
+                Text(ann.title, fontWeight = FontWeight.Bold, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(ann.content, fontSize = 13.sp)
+                    if (ann.targetSubject.isNotBlank() || ann.targetGrade.isNotBlank()) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                "موجه إلى: ${ann.targetSubject.ifBlank { "جميع المواد" }} - ${ann.targetGrade.ifBlank { "جميع الصفوف" }}",
+                                fontSize = 11.sp,
+                                modifier = Modifier.padding(8.dp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(onClick = { selectedAnnouncementToShow = null }) {
+                    Text("إغلاق")
+                }
+            }
+        )
     }
 }

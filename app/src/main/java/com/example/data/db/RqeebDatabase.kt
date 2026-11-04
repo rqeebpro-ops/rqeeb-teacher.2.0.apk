@@ -22,9 +22,19 @@ import kotlinx.coroutines.launch
         TimetableSlotEntity::class,
         HomeworkEntity::class,
         TermPlanEntity::class,
-        AppSettingEntity::class
+        AppSettingEntity::class,
+        EducationalResourceEntity::class,
+        AppAnnouncementEntity::class,
+        AppDynamicContentEntity::class,
+        ActivationCodeEntity::class,
+        SmartExplanationEntity::class,
+        CustomExamTemplateEntity::class,
+        StudentAttendanceEntity::class,
+        StudentBehaviorEntity::class,
+        CommunicationLogEntity::class,
+        ParentNotificationConfigEntity::class
     ],
-    version = 4,
+    version = 11,
     exportSchema = false
 )
 abstract class RqeebDatabase : RoomDatabase() {
@@ -33,10 +43,20 @@ abstract class RqeebDatabase : RoomDatabase() {
     abstract fun examDao(): ExamDao
     abstract fun bookDao(): BookDao
     abstract fun studentDao(): StudentDao
+    abstract fun studentAttendanceDao(): StudentAttendanceDao
+    abstract fun studentBehaviorDao(): StudentBehaviorDao
+    abstract fun communicationLogDao(): CommunicationLogDao
+    abstract fun parentNotificationConfigDao(): ParentNotificationConfigDao
     abstract fun timetableDao(): TimetableDao
     abstract fun homeworkDao(): HomeworkDao
     abstract fun termPlanDao(): TermPlanDao
     abstract fun appSettingDao(): AppSettingDao
+    abstract fun educationalResourceDao(): EducationalResourceDao
+    abstract fun appAnnouncementDao(): AppAnnouncementDao
+    abstract fun appDynamicContentDao(): AppDynamicContentDao
+    abstract fun activationCodeDao(): ActivationCodeDao
+    abstract fun smartExplanationDao(): SmartExplanationDao
+    abstract fun customExamTemplateDao(): CustomExamTemplateDao
 
     companion object {
         @Volatile
@@ -85,7 +105,7 @@ abstract class RqeebDatabase : RoomDatabase() {
 
                 // Default Owner settings & Official Yemeni Contact Details
                 settingDao.setValue(AppSettingEntity("owner_email", YemeniCurriculum.OWNER_EMAIL_DEFAULT))
-                settingDao.setValue(AppSettingEntity("owner_password", "admin123456"))
+                settingDao.setValue(AppSettingEntity("owner_password", ""))
                 settingDao.setValue(AppSettingEntity("owner_phone", YemeniCurriculum.OWNER_PHONE_DEFAULT))
                 settingDao.setValue(AppSettingEntity("owner_whatsapp_url", YemeniCurriculum.OWNER_WHATSAPP_URL_DEFAULT))
                 settingDao.setValue(AppSettingEntity("auto_approve", "false"))
@@ -218,6 +238,79 @@ abstract class RqeebDatabase : RoomDatabase() {
                     )
                 )
                 bookDao.insertBooks(sampleBooks)
+
+                // Seed Sample Students with Parent WhatsApp details
+                val studentDao = database.studentDao()
+                val sampleStudents = listOf(
+                    StudentEntity(
+                        teacherId = teacherId,
+                        fullName = "عمر خالد العريقي",
+                        schoolNumber = "2024001",
+                        seatNumber = "101",
+                        grade = "9/ إعدادي",
+                        section = "أ",
+                        schoolName = "مدرسة جمال عبد الناصر للمتفوقين",
+                        parentName = "خالد العريقي",
+                        parentPhone = "+967771234567",
+                        parentRelationship = "أب",
+                        monthlyTestScore = 18.5,
+                        termScore = 19.0,
+                        finalExamScore = 18.0,
+                        homeworkScore = 10.0,
+                        activityScore = 10.0,
+                        examScore = 18.5,
+                        generalRating = "ممتاز",
+                        strengths = "ممتاز في الجبر والتحليل، مشارك فعال بالحصة",
+                        weaknesses = "يحتاج تركيز بسيط في صياغة المسائل اللفظية"
+                    ),
+                    StudentEntity(
+                        teacherId = teacherId,
+                        fullName = "أحمد محمد الحيمي",
+                        schoolNumber = "2024002",
+                        seatNumber = "102",
+                        grade = "9/ إعدادي",
+                        section = "أ",
+                        schoolName = "مدرسة جمال عبد الناصر للمتفوقين",
+                        parentName = "محمد الحيمي",
+                        parentPhone = "+967779876543",
+                        parentRelationship = "أب",
+                        monthlyTestScore = 14.0,
+                        termScore = 13.5,
+                        finalExamScore = 14.0,
+                        homeworkScore = 7.0,
+                        activityScore = 8.0,
+                        examScore = 14.0,
+                        generalRating = "جيد",
+                        strengths = "مواظب على الحضور، هادئ وملتزم بالانضباط",
+                        weaknesses = "تحسين مستوى إنجاز الواجبات المنزلية والتمارين"
+                    ),
+                    StudentEntity(
+                        teacherId = teacherId,
+                        fullName = "عبدالله صالح الذاري",
+                        schoolNumber = "2024003",
+                        seatNumber = "103",
+                        grade = "9/ إعدادي",
+                        section = "ب",
+                        schoolName = "مدرسة جمال عبد الناصر للمتفوقين",
+                        parentName = "صالح الذاري",
+                        parentPhone = "+967733112233",
+                        parentRelationship = "أب",
+                        monthlyTestScore = 19.5,
+                        termScore = 20.0,
+                        finalExamScore = 19.5,
+                        homeworkScore = 10.0,
+                        activityScore = 10.0,
+                        examScore = 19.5,
+                        generalRating = "ممتاز مرتفع",
+                        strengths = "تفوق استثنائي، حائز على المركز الأول في الرياضيات",
+                        weaknesses = "لا يوجد - يستحق كل الثناء والتشجيع"
+                    )
+                )
+                sampleStudents.forEach { studentDao.insertStudent(it) }
+
+                // Seed 100 Official Activation Codes (T001 - T100)
+                val codeDao = database.activationCodeDao()
+                codeDao.insertCodes(com.example.data.model.OfficialActivationCodes.createInitialEntities())
             }
         }
     }
