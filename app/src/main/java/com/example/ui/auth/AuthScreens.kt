@@ -107,7 +107,7 @@ fun AuthScreen(
                 ) {
                     Image(
                         painter = painterResource(id = R.drawable.img_app_logo),
-                        contentDescription = "شعار رقيب المعلم الذكي",
+                        contentDescription = "شعار المعلم التربوي الذكي",
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize().clip(CircleShape)
                     )
@@ -117,7 +117,7 @@ fun AuthScreen(
             Spacer(modifier = Modifier.height(12.dp))
 
             Text(
-                text = "رقيب مساعد المعلم الذكي",
+                text = "المعلم التربوي الذكي",
                 style = MaterialTheme.typography.headlineMedium.copy(
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary
@@ -663,7 +663,7 @@ fun TeacherRegisterForm(
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Text(
-                text = "انضمام معلم جديد إلى رقيب (اليمن)",
+                text = "انضمام معلم جديد إلى المعلم التربوي الذكي",
                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                 color = MaterialTheme.colorScheme.onSurface
             )
@@ -904,7 +904,7 @@ fun TeacherRegisterForm(
                                 repository.registerTeacher(newTeacher)
 
                                 // Open WhatsApp with subscription text
-                                val msg = "السلام عليكم ورحمة الله، أنا المعلم: ${fullName.trim()}، رقم الهاتف: ${phone.trim()}، المدرسة: ${schoolName.trim()} ($governorate)، المادة: ${subject.trim()} - $gradeTaught. أرغب في الاشتراك بـ «رقيب – مساعد المعلم الذكي» وتفعيل حسابي. يرجى إرسال كود التفعيل."
+                                val msg = "السلام عليكم ورحمة الله، أنا المعلم: ${fullName.trim()}، رقم الهاتف: ${phone.trim()}، المدرسة: ${schoolName.trim()} ($governorate)، المادة: ${subject.trim()} - $gradeTaught. أرغب في الاشتراك في تطبيق «المعلم التربوي الذكي» وتفعيل حسابي. يرجى إرسال كود التفعيل."
                                 ContactUtils.openOwnerWhatsApp(context, msg)
 
                                 successMessage = "تم فتح الواتساب لإرسال طلب الاشتراك. أدخل كود التفعيل المستلم من الإدارة في الخانة أدناه واضغط (تفعيل الحساب والدخول للتطبيق)."

@@ -14,6 +14,7 @@ import com.example.data.model.LessonEntity
 import com.example.data.model.SmartExplanationResult
 import com.example.data.model.StudentEntity
 import com.example.data.model.YemeniCurriculum
+import android.util.Base64
 import com.example.ui.teacher.ExamDiagramSvg
 import java.io.File
 import java.io.FileOutputStream
@@ -135,11 +136,92 @@ object PrintUtils {
                 """ else ""}
 
                 <div class="footer">
-                    تم إعداد وتحضير هذا الدرس وفق النموذج المعتمد لوزارة التربية والتعليم بالجمهورية اليمنية عبر تطبيق «رقيب – مساعد المعلم الذكي»
+                    تم إعداد وتحضير هذا الدرس وفق النموذج المعتمد لوزارة التربية والتعليم عبر تطبيق «المعلم التربوي الذكي»
                 </div>
             </body>
             </html>
         """.trimIndent()
+    }
+
+    private fun renderRichQuestionText(idx: Int, q: ExamQuestion): String {
+        val st = q.richStyle
+        val weight = if (st.isBold) "bold" else "normal"
+        val style = if (st.isItalic) "italic" else "normal"
+        val deco = if (st.isUnderline) "underline" else "none"
+        val align = when (st.align) {
+            "CENTER" -> "center"
+            "END" -> "left"
+            else -> "right"
+        }
+        val color = st.textColorHex.ifBlank { "#000000" }
+        val fontSize = st.fontSizeSp.coerceIn(11, 24)
+        return "<div style='font-size:${fontSize}px; font-weight:$weight; font-style:$style; text-decoration:$deco; color:$color; text-align:$align; line-height:1.65;'>س${idx + 1}: ${q.text}</div>"
+    }
+
+    private fun renderQuestionAttachmentsHtml(q: ExamQuestion, isAnswerKey: Boolean): String {
+        val sb = StringBuilder()
+
+        // Inserted Graphics (Emojis + optional SVG)
+        if (q.insertedGraphics.isNotEmpty()) {
+            sb.append("<div style='display:flex; flex-wrap:wrap; justify-content:center; gap:14px; margin:10px 0;'>")
+            for (g in q.insertedGraphics) {
+                sb.append("<div style='display:inline-block; border:1.5px solid #000; border-radius:8px; padding:8px 14px; text-align:center; background:#fff; margin:4px;'>")
+                if (g.emoji.isNotBlank()) {
+                    sb.append("<div style='font-size:${(g.sizeDp * 0.65).toInt().coerceIn(28, 64)}px; line-height:1.1;'>${g.emoji}</div>")
+                }
+                if (g.label.isNotBlank()) {
+                    sb.append("<div style='font-size:11px; font-weight:bold; color:#000; margin-top:4px;'>${g.label}</div>")
+                }
+                sb.append("</div>")
+            }
+            sb.append("</div>")
+        }
+
+        // Inserted Uploaded Images (Base64 embedded)
+        if (q.insertedImages.isNotEmpty()) {
+            sb.append("<div style='text-align:center; margin:10px 0;'>")
+            for (img in q.insertedImages) {
+                val file = File(img.localPath)
+                if (file.exists()) {
+                    val b64 = try {
+                        Base64.encodeToString(file.readBytes(), Base64.NO_WRAP)
+                    } catch (_: Throwable) { "" }
+                    if (b64.isNotBlank()) {
+                        sb.append("<div style='display:inline-block; margin:6px; text-align:center;'>")
+                        sb.append("<img src='data:image/png;base64,$b64' style='max-width:92%; max-height:${img.sizeDp + 50}px; border:1.5px solid #000; border-radius:4px;' />")
+                        if (img.caption.isNotBlank()) {
+                            sb.append("<div style='font-size:11px; color:#334155; margin-top:3px;'>${img.caption}</div>")
+                        }
+                        sb.append("</div>")
+                    }
+                }
+            }
+            sb.append("</div>")
+        }
+
+        // Inserted Editable Tables
+        if (q.insertedTables.isNotEmpty()) {
+            for (tbl in q.insertedTables) {
+                if (tbl.rows.isNotEmpty()) {
+                    if (tbl.title.isNotBlank()) {
+                        sb.append("<div style='font-size:12px; font-weight:bold; margin:8px 0 4px 0; color:#000;'>${tbl.title}:</div>")
+                    }
+                    sb.append("<table style='width:100%; border-collapse:collapse; border:1.5px solid #000; margin:6px 0; font-size:12px;'>")
+                    tbl.rows.forEachIndexed { rIdx, rowCells ->
+                        val bg = if (rIdx == 0) "background:#f1f5f9; font-weight:bold;" else "background:#ffffff;"
+                        sb.append("<tr style='$bg'>")
+                        rowCells.forEach { cellText ->
+                            val tag = if (rIdx == 0) "th" else "td"
+                            sb.append("<$tag style='border:1px solid #000; padding:6px 8px; text-align:center; min-height:24px;'>${cellText.ifBlank { "&nbsp;" }}</$tag>")
+                        }
+                        sb.append("</tr>")
+                    }
+                    sb.append("</table>")
+                }
+            }
+        }
+
+        return sb.toString()
     }
 
     /**
@@ -167,6 +249,8 @@ object PrintUtils {
                         "</div>"
             } else ""
 
+            val attachmentsHtml = renderQuestionAttachmentsHtml(q, isAnswerKey)
+
             val answerKeyDetails = if (isAnswerKey) {
                 """
                 <div style="background: #e8f5e9; border: 1px solid #81c784; padding: 8px 12px; margin-top: 8px; border-radius: 6px; font-size: 13px;">
@@ -176,24 +260,27 @@ object PrintUtils {
                 </div>
                 """.trimIndent()
             } else {
-                // Space for student to write answer if essay/problem/blank
-                if (q.options.isEmpty() && q.type.name != "TRUE_FALSE") {
-                    "<div style='border-bottom: 1px dotted #94a3b8; margin: 16px 0 10px 0; height: 35px;'></div>"
+                if (q.options.isEmpty() && q.insertedTables.isEmpty() && q.type.name != "TRUE_FALSE") {
+                    val lines = (1..q.answerLinesCount.coerceIn(1, 6)).joinToString("") {
+                        "<div style='border-bottom: 1px dotted #64748b; margin: 14px 0 8px 0; height: 18px;'></div>"
+                    }
+                    lines
                 } else ""
             }
 
             """
             <div style="margin-bottom: 16px; page-break-inside: avoid;">
-                <div style="font-size: 14px; font-weight: bold; line-height: 1.6;">
-                    <span>س${idx + 1}: ${q.text}</span>
-                    <span style="float: left; background: #e2e8f0; padding: 2px 8px; border-radius: 4px; font-size: 12px; color: #334155;">[${q.score} ${if (q.score == 1) "درجة" else "درجات"}]</span>
+                <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+                    <div style="flex:1;">${renderRichQuestionText(idx, q)}</div>
+                    <span style="background: #f1f5f9; border:1px solid #000; padding: 2px 8px; border-radius: 4px; font-size: 12px; color: #000; font-weight:bold; margin-right:8px;">[${q.score} ${if (q.score == 1) "درجة" else "درجات"}]</span>
                 </div>
                 $optHtml
+                $attachmentsHtml
                 $diagramHtml
                 $answerKeyDetails
             </div>
             """.trimIndent()
-        }.joinToString("<hr style='border: 0; border-top: 1px dashed #cbd5e1; margin: 12px 0;'>")
+        }.joinToString("<hr style='border: 0; border-top: 1px solid #000; margin: 12px 0;'>")
 
         return """
             <!DOCTYPE html>
@@ -201,14 +288,16 @@ object PrintUtils {
             <head>
                 <meta charset="utf-8">
                 <style>
-                    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 25px; color: #1e293b; background: #fff; }
-                    .header { border: 2px solid #0f172a; padding: 12px 16px; margin-bottom: 18px; border-radius: 8px; }
+                    @page { size: A4 portrait; margin: 12mm; }
+                    @media print { .no-print { display: none !important; } body { margin: 0; background: #fff !important; } }
+                    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 20px; color: #000; background: #fff; }
+                    .header { border: 2px solid #000; padding: 12px 16px; margin-bottom: 18px; border-radius: 4px; }
                     .header-top { display: flex; justify-content: space-between; font-size: 13px; font-weight: bold; }
-                    .title { text-align: center; font-size: 19px; font-weight: bold; margin: 8px 0; color: #006874; }
-                    .badge { text-align: center; font-size: 12px; font-weight: bold; color: ${if (isAnswerKey) "#006874" else "#475569"}; margin-bottom: 6px; }
-                    .student-box { border: 1.5px solid #64748b; padding: 8px 12px; margin-top: 8px; font-size: 13px; background: #f8fafc; border-radius: 4px; }
+                    .title { text-align: center; font-size: 19px; font-weight: bold; margin: 8px 0; color: #000; }
+                    .badge { text-align: center; font-size: 12px; font-weight: bold; color: #000; margin-bottom: 6px; }
+                    .student-box { border: 1.5px solid #000; padding: 8px 12px; margin-top: 8px; font-size: 13px; background: #fff; }
                     .questions-container { margin-top: 16px; }
-                    .footer { text-align: center; margin-top: 35px; font-size: 13px; font-weight: bold; border-top: 2px solid #cbd5e1; padding-top: 10px; color: #006874; }
+                    .footer { text-align: center; margin-top: 35px; font-size: 13px; font-weight: bold; border-top: 2px solid #000; padding-top: 10px; color: #000; }
                 </style>
             </head>
             <body>
@@ -318,6 +407,8 @@ object PrintUtils {
                         "</div>"
             } else ""
 
+            val attachmentsHtml = renderQuestionAttachmentsHtml(q, isAnswerKey)
+
             val answerKeyDetails = if (isAnswerKey) {
                 """
                 <div style="background: #e8f5e9; border: 1.5px solid #4caf50; padding: 6px 12px; margin-top: 8px; font-size: 13px;">
@@ -327,8 +418,11 @@ object PrintUtils {
                 </div>
                 """.trimIndent()
             } else {
-                if (q.options.isEmpty() && q.diagramType.isNullOrBlank() && q.type.name != "TRUE_FALSE") {
-                    "<div style='border: 1.5px solid #000; height: 38px; width: 140px; margin: 10px 0;'></div>"
+                if (q.options.isEmpty() && q.diagramType.isNullOrBlank() && q.insertedTables.isEmpty() && q.type.name != "TRUE_FALSE") {
+                    val lines = (1..q.answerLinesCount.coerceIn(1, 6)).joinToString("") {
+                        "<div style='border-bottom: 1px dotted #000; height: 22px; width: 100%; margin: 6px 0;'></div>"
+                    }
+                    lines
                 } else ""
             }
 
@@ -338,10 +432,9 @@ object PrintUtils {
                     $qNumArabic
                 </td>
                 <td style="width: 84%; border: 1.5px solid #000; padding: 8px 12px; vertical-align: top; text-align: right;">
-                    <div style="font-size: 15px; font-weight: bold; line-height: 1.6;">
-                        ${q.text}
-                    </div>
+                    ${renderRichQuestionText(idx, q)}
                     $optHtml
+                    $attachmentsHtml
                     $diagramHtml
                     $answerKeyDetails
                 </td>
@@ -361,6 +454,9 @@ object PrintUtils {
                     @page {
                         size: A4 portrait;
                         margin: 10mm 10mm 12mm 10mm;
+                    }
+                    @media print {
+                        .no-print { display: none !important; }
                     }
                     body {
                         font-family: 'Traditional Arabic', 'Arial', Tahoma, sans-serif;
@@ -767,7 +863,7 @@ object PrintUtils {
                 """ else ""}
 
                 <div class="footer">
-                    تم إعداد هذا الدليل عبر تطبيق «رقيب – مساعد المعلم الذكي» • وفق المعايير التربوية لوزارة التربية والتعليم بالجمهورية اليمنية
+                    تم إعداد هذا الدليل عبر تطبيق «المعلم التربوي الذكي» • وفق المعايير التربوية لوزارة التربية والتعليم
                 </div>
             </body>
             </html>
@@ -943,7 +1039,7 @@ object PrintUtils {
                 """ else ""}
 
                 <div class="footer">
-                    تم إصدار هذا التقرير رسمياً عبر تطبيق «رقيب – مساعد المعلم الذكي» للتواصل المستمر مع أولياء الأمور
+                    تم إصدار هذا التقرير رسمياً عبر تطبيق «المعلم التربوي الذكي» للتواصل المستمر مع أولياء الأمور
                 </div>
             </body>
             </html>

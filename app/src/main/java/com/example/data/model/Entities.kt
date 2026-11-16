@@ -162,6 +162,37 @@ enum class QuestionType {
     }
 }
 
+data class ExamQuestionTextStyle(
+    val fontSizeSp: Int = 13,
+    val isBold: Boolean = true,
+    val isItalic: Boolean = false,
+    val isUnderline: Boolean = false,
+    val textColorHex: String = "#000000",
+    val align: String = "START" // START, CENTER, END
+)
+
+data class ExamTableBlock(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val title: String = "",
+    val rows: List<List<String>> = emptyList()
+)
+
+data class ExamGraphicBlock(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val label: String,
+    val emoji: String = "",
+    val category: String = "",
+    val diagramType: String? = null,
+    val sizeDp: Int = 64
+)
+
+data class ExamImageBlock(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val localPath: String,
+    val caption: String = "",
+    val sizeDp: Int = 130
+)
+
 data class ExamQuestion(
     val id: Int,
     val type: QuestionType,
@@ -172,7 +203,12 @@ data class ExamQuestion(
     val explanation: String = "",
     val diagramId: String? = null,
     val diagramType: String? = null,
-    val diagramInstruction: String? = null
+    val diagramInstruction: String? = null,
+    val richStyle: ExamQuestionTextStyle = ExamQuestionTextStyle(),
+    val insertedTables: List<ExamTableBlock> = emptyList(),
+    val insertedGraphics: List<ExamGraphicBlock> = emptyList(),
+    val insertedImages: List<ExamImageBlock> = emptyList(),
+    val answerLinesCount: Int = 2
 )
 
 /**

@@ -97,7 +97,7 @@ fun OwnerDashboard(
                                 color = OwnerGold
                             ) {
                                 Text(
-                                    "إدارة رقيب",
+                                    "إدارة التطبيق",
                                     color = Color.White,
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.Bold,

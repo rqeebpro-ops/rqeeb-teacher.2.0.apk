@@ -237,6 +237,9 @@ fun ExamGeneratorScreen(
     var showPaperExamView by remember { mutableStateOf(false) }
     var selectedTemplateForSetup by remember { mutableStateOf<PrebuiltExamTemplate?>(null) }
     var isGeneratingTemplateAI by remember { mutableStateOf(false) }
+    var activePaperTemplateId by remember { mutableStateOf<String?>(null) }
+    var showTemplateLibraryDialog by remember { mutableStateOf(false) }
+    val customTemplates by repository.getCustomExamTemplatesFlow(teacher.id).collectAsState(initial = emptyList())
 
     if (showPaperExamView && questionsList.isNotEmpty()) {
         YemeniPaperExamView(
@@ -261,6 +264,7 @@ fun ExamGeneratorScreen(
             teacher = teacher,
             repository = repository,
             geminiService = geminiService,
+            initialTemplateId = activePaperTemplateId,
             onBack = { showPaperExamView = false },
             onExamUpdated = { updatedExam, updatedQuestions ->
                 questionsList.clear()
@@ -395,13 +399,22 @@ fun ExamGeneratorScreen(
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.weight(1f)
                             ) {
                                 Icon(Icons.Default.DashboardCustomize, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                                 Column {
                                     Text("مكتبة القوالب الجاهزة والنماذج السريعة", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = MaterialTheme.colorScheme.primary)
-                                    Text("اختر هيكل اختبار جاهز وتعبئة البيانات الأساسية بضغطة واحدة", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text("اختر هيكل وتنسيق الاختبار ليُطبَّق تلقائياً على المحرر", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
+                            }
+                            OutlinedButton(
+                                onClick = { showTemplateLibraryDialog = true },
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.height(34.dp).testTag("open_template_library_from_generator_btn")
+                            ) {
+                                Text("عرض الكل", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             }
                         }
 
@@ -859,12 +872,13 @@ fun ExamGeneratorScreen(
                                         totalScore = totalScore,
                                         difficulty = difficulty,
                                         selectedTypes = selectedQuestionTypes.toList(),
-                                        includeDiagrams = includeDiagrams
+                                        includeDiagrams = includeDiagrams,
+                                        context = context
                                     )
                                     questionsList.clear()
                                     questionsList.addAll(qs)
                                     isGenerating = false
-                                    Toast.makeText(context, "تم توليد أسئلة الاختبار بنجاح مع توزيع الدرجات والرسوم!", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "تم توليد أسئلة الاختبار وتحويل الجداول والرسومات بنجاح!", Toast.LENGTH_SHORT).show()
                                 }
                             },
                             modifier = Modifier
@@ -905,6 +919,27 @@ fun ExamGeneratorScreen(
                             onClick = { isAnswerKeyView = true },
                             text = { Text("نموذج إجابة المعلم وسلم الدرجات", fontWeight = FontWeight.Bold) },
                             icon = { Icon(Icons.Default.CheckCircle, contentDescription = null) }
+                        )
+                    }
+                }
+
+                // Prominent 1-Tap Launch Button for the Full Interactive A4 Editor (Toolbar, Tables, Photos, Graphics Library, Drag & Drop, Print)
+                item {
+                    Button(
+                        onClick = { showPaperExamView = true },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF006874)),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(50.dp)
+                            .testTag("open_full_a4_editor_button")
+                    ) {
+                        Icon(Icons.Default.EditNote, contentDescription = null, modifier = Modifier.size(20.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            "فتح محرر الورقة المتكامل A4 (جداول • صور • رسومات • سحب وإفلات • طباعة)",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
                         )
                     }
                 }
@@ -1136,6 +1171,17 @@ fun ExamGeneratorScreen(
                                     )
                                 }
                             }
+
+                            // Rich Attachments: Inserted Tables, Graphics Library Icons & Photos
+                            ExamQuestionRichAttachmentsView(
+                                question = question,
+                                isEditMode = true,
+                                isAnswerKeyView = isAnswerKeyView,
+                                isPrintPreviewMode = false,
+                                onUpdateQuestion = { updatedQ ->
+                                    questionsList[index] = updatedQ
+                                }
+                            )
 
                             // Teacher Model Answer Key & Rubric (only visible in Teacher Tab)
                             if (isAnswerKeyView) {
@@ -1388,7 +1434,7 @@ fun ExamGeneratorScreen(
                                 score = newScore,
                                 diagramType = newDiagramType
                             )
-                            questionsList.add(newQ)
+                            questionsList.add(ExamPlaceholderParser.parseQuestionPlaceholders(newQ))
                             isAddingManualQuestion = false
                             Toast.makeText(context, "تمت إضافة السؤال بنجاح!", Toast.LENGTH_SHORT).show()
                         }
@@ -1549,18 +1595,31 @@ fun ExamGeneratorScreen(
                                         totalScore = template.defaultTotalScore,
                                         difficulty = "متدرج",
                                         selectedTypes = template.questionTypes,
-                                        includeDiagrams = true
+                                        includeDiagrams = true,
+                                        context = context
                                     )
                                     questionsList.addAll(generated)
                                 } else {
                                     questionsList.addAll(template.sampleQuestions)
                                 }
 
+                                activePaperTemplateId = when (template.id) {
+                                    "quick_quiz" -> "quiz_fast"
+                                    "final_term" -> "final_ministry"
+                                    "math_science_visual" -> "lab_visual"
+                                    else -> "monthly_official"
+                                }
                                 selectedTemplateForSetup = null
                                 showPaperExamView = true
                                 Toast.makeText(context, "تم تطبيق القالب وإنشاء الاختبار بنجاح!", Toast.LENGTH_SHORT).show()
                             } catch (e: Exception) {
                                 questionsList.addAll(template.sampleQuestions)
+                                activePaperTemplateId = when (template.id) {
+                                    "quick_quiz" -> "quiz_fast"
+                                    "final_term" -> "final_ministry"
+                                    "math_science_visual" -> "lab_visual"
+                                    else -> "monthly_official"
+                                }
                                 selectedTemplateForSetup = null
                                 showPaperExamView = true
                                 Toast.makeText(context, "تم تطبيق القالب بهيكل العينة المعتمد!", Toast.LENGTH_SHORT).show()
@@ -1590,6 +1649,43 @@ fun ExamGeneratorScreen(
                     enabled = !isGeneratingTemplateAI
                 ) {
                     Text("إلغاء")
+                }
+            }
+        )
+    }
+
+    // Full Template Library Modal accessible directly from ExamGeneratorScreen
+    if (showTemplateLibraryDialog) {
+        TemplateLibraryModalDialog(
+            activeTemplateId = activePaperTemplateId ?: "monthly_official",
+            customTemplates = customTemplates,
+            onDismiss = { showTemplateLibraryDialog = false },
+            onApplyFormatTemplate = { tpl, replaceQuestions ->
+                activePaperTemplateId = tpl.id
+                examType = tpl.examTypeTitle
+                durationMinutes = tpl.durationMinutes
+                totalScore = tpl.defaultTotalScore
+                if (replaceQuestions || questionsList.isEmpty()) {
+                    questionsList.clear()
+                    questionsList.addAll(tpl.sampleQuestions)
+                }
+                showTemplateLibraryDialog = false
+                showPaperExamView = true
+                Toast.makeText(context, "تم فتح المحرر وتطبيق «${tpl.title}» تلقائياً!", Toast.LENGTH_SHORT).show()
+            },
+            onApplyCustomTemplate = { custom ->
+                activePaperTemplateId = "custom_${custom.id}"
+                if (questionsList.isEmpty()) {
+                    questionsList.addAll(ExamTemplateLibrary.TEMPLATES.first { it.id == "monthly_official" }.sampleQuestions)
+                }
+                showTemplateLibraryDialog = false
+                showPaperExamView = true
+                Toast.makeText(context, "تم فتح المحرر وتطبيق القالب المخصص «${custom.templateName}»!", Toast.LENGTH_SHORT).show()
+            },
+            onDeleteCustomTemplate = { custom ->
+                coroutineScope.launch {
+                    repository.deleteCustomExamTemplate(custom)
+                    Toast.makeText(context, "تم حذف القالب «${custom.templateName}»", Toast.LENGTH_SHORT).show()
                 }
             }
         )
@@ -1879,6 +1975,15 @@ fun OfficialMathPaperPreview(
                                     modifier = Modifier.padding(vertical = 4.dp)
                                 )
                             }
+
+                            // Rich Attachments (Tables, Graphics, Photos) inside A4 Preview
+                            ExamQuestionRichAttachmentsView(
+                                question = q,
+                                isEditMode = false,
+                                isAnswerKeyView = isAnswerKey,
+                                isPrintPreviewMode = true,
+                                onUpdateQuestion = {}
+                            )
 
                             // Answer Key Box
                             if (isAnswerKey) {

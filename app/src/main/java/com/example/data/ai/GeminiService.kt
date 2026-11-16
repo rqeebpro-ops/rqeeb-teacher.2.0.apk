@@ -437,7 +437,8 @@ class GeminiService {
         topic: String,
         examType: String,
         count: Int,
-        difficulty: String
+        difficulty: String,
+        context: Context? = null
     ): List<ExamQuestion> = generateRichExamQuestions(
         subject = subject,
         grade = grade,
@@ -447,7 +448,8 @@ class GeminiService {
         totalScore = 20,
         difficulty = difficulty,
         selectedTypes = listOf("اختيار من متعدد", "صح وخطأ", "أكمل الفراغ", "مسائل رياضية وفيزيائية"),
-        includeDiagrams = true
+        includeDiagrams = true,
+        context = context
     )
 
     suspend fun generateRichExamQuestions(
@@ -459,29 +461,50 @@ class GeminiService {
         totalScore: Int,
         difficulty: String,
         selectedTypes: List<String>,
-        includeDiagrams: Boolean
+        includeDiagrams: Boolean,
+        context: Context? = null
     ): List<ExamQuestion> = withContext(Dispatchers.IO) {
         val dg = YemeniCurriculum.toDisplayGrade(grade)
-        val questions = mutableListOf<ExamQuestion>()
-
-        // Base score distribution
-        val baseScore = (totalScore / count).coerceAtLeast(1)
-        val remainder = totalScore % count
-
         val availableTypes = if (selectedTypes.isNotEmpty()) selectedTypes else YemeniCurriculum.EXAM_QUESTION_TYPES
+
+        val apiKey = getEffectiveApiKey(context)
+        if (apiKey.isNotBlank()) {
+            try {
+                val aiQuestions = callGeminiForRichExam(
+                    apiKey = apiKey,
+                    subject = subject,
+                    grade = dg,
+                    topic = topic,
+                    examType = examType,
+                    count = count,
+                    totalScore = totalScore,
+                    difficulty = difficulty,
+                    selectedTypes = availableTypes,
+                    includeDiagrams = includeDiagrams
+                )
+                if (!aiQuestions.isNullOrEmpty()) {
+                    return@withContext com.example.ui.teacher.ExamPlaceholderParser.parseAndEnrichQuestions(aiQuestions)
+                }
+            } catch (e: Throwable) {
+                Log.w(TAG, "Gemini rich exam call failed, falling back to structured generator: ${e.message}")
+            }
+        }
+
+        val questions = mutableListOf<ExamQuestion>()
+        val baseScore = (totalScore / count.coerceAtLeast(1)).coerceAtLeast(1)
+        val remainder = totalScore % count.coerceAtLeast(1)
 
         for (i in 1..count) {
             val qTypeStr = availableTypes[(i - 1) % availableTypes.size]
             val scoreForThis = baseScore + (if (i <= remainder) 1 else 0)
 
             when {
-                // 1) Multiple Choice
                 qTypeStr.contains("اختيار من متعدد") -> {
                     questions.add(
                         ExamQuestion(
                             id = i,
                             type = QuestionType.MULTIPLE_CHOICE,
-                            text = "في موضوع ($topic) بمقرر $subject لصف $dg: أي العبارات التالية تعتبر القاعدة الصحيحة المعتمدة في المنهج اليمني؟",
+                            text = "في موضوع ($topic) بمقرر $subject لصف $dg: أي العبارات التالية تعتبر القاعدة الصحيحة المعتمدة في المنهج؟",
                             options = listOf(
                                 "أ) الاستنتاج العلمي المطابق للتعريف الرسمي",
                                 "ب) الاستنتاج المعاكس للشرط الأساسي",
@@ -490,12 +513,11 @@ class GeminiService {
                             ),
                             correctAnswer = "أ) الاستنتاج العلمي المطابق للتعريف الرسمي",
                             score = scoreForThis,
-                            explanation = "مستند إلى نص الدرس والقاعدة المقررة في كتاب وزارة التربية والتعليم."
+                            explanation = "مستند إلى نص الدرس والقاعدة المقررة في الكتاب الوزاري."
                         )
                     )
                 }
 
-                // 2) True or False
                 qTypeStr.contains("صح") -> {
                     questions.add(
                         ExamQuestion(
@@ -505,42 +527,39 @@ class GeminiService {
                             options = listOf("صح (✓)", "خطأ (✗)"),
                             correctAnswer = "صح (✓)",
                             score = scoreForThis,
-                            explanation = "قاعدة أساسية مثبتة في المنهج الدراسي اليمني المعتمد."
+                            explanation = "قاعدة أساسية مثبتة في المنهج الدراسي المعتمد."
                         )
                     )
                 }
 
-                // 3) Fill in the blanks
                 qTypeStr.contains("أكمل الفراغ") -> {
                     questions.add(
                         ExamQuestion(
                             id = i,
                             type = QuestionType.FILL_BLANKS,
-                            text = "أكمل الفراغ بما يناسبه علمياً: عند تطبيق القوانين المتعلقة بـ ($topic)، فإن الناتج يعتمد طردياً على .................... وعكسياً على ....................",
+                            text = "أكمل الفراغ بما يناسبه علمياً: عند دراسة ($topic)، فإن النتيجة الأساسية تعتمد على .................... وعكسياً على ....................",
                             options = emptyList(),
                             correctAnswer = "القيمة الأساسية / المعامل الثابت",
                             score = scoreForThis,
-                            explanation = "الاعتماد الرياضي والفيزيائي المباشر لنظرية الدرس."
+                            explanation = "الاعتماد العلمي المباشر لقاعدة الدرس."
                         )
                     )
                 }
 
-                // 4) Definitions
                 qTypeStr.contains("عرف") || qTypeStr.contains("المصطلحات") -> {
                     questions.add(
                         ExamQuestion(
                             id = i,
                             type = QuestionType.DEFINITIONS,
-                            text = "عرّف المصطلح العلمي التالي تعريفاً دقيقاً وفق المنهج اليمني: ($topic).",
+                            text = "عرّف المصطلح العلمي التالي تعريفاً دقيقاً وفق المنهج: ($topic).",
                             options = emptyList(),
                             correctAnswer = "هو المفهوم العلمي/التربوي الدال على الإجراء المنظم الذي يربط بين المدخلات والنتائج وفق شروط محددة.",
                             score = scoreForThis,
-                            explanation = "التعريف النصي الوارد في مسرد مصطلحات الكتاب الوزاري."
+                            explanation = "التعريف النصي الوارد في مسرد مصطلحات الكتاب المدرسي."
                         )
                     )
                 }
 
-                // 5) Explain Why
                 qTypeStr.contains("علل") -> {
                     questions.add(
                         ExamQuestion(
@@ -555,13 +574,12 @@ class GeminiService {
                     )
                 }
 
-                // 6) Compare
                 qTypeStr.contains("قارن") -> {
                     questions.add(
                         ExamQuestion(
                             id = i,
                             type = QuestionType.COMPARE,
-                            text = "قارن في جدول منظم بين الحالتين المرتبطتين بـ ($topic) من حيث: المفهوم، والخصائص، والتطبيق العملي.",
+                            text = "قارن بين المفهومين الرئيسيين في درس ($topic) من حيث التعريف والخصائص والتطبيق العملي: [جدول مقارنة]",
                             options = emptyList(),
                             correctAnswer = "الحالة الأولى: تتميز بالثبات والانتظام. الحالة الثانية: تتميز بالتغير والاعتماد على المتغيرات المحيطة.",
                             score = scoreForThis,
@@ -570,49 +588,167 @@ class GeminiService {
                     )
                 }
 
-                // 7) Diagram Label / Complete Diagram
                 (qTypeStr.contains("الرسم") || includeDiagrams) && i == count -> {
-                    val dType = when {
-                        subject.contains("الرياضيات") || subject.contains("هندسة") -> "GEOMETRY_TRIANGLE"
-                        subject.contains("الفيزياء") -> "PHYSICS_CIRCUIT"
-                        subject.contains("الأحياء") || subject.contains("العلوم") -> "BIOLOGY_CELL"
-                        subject.contains("الكيمياء") -> "CHEMISTRY_ATOM"
-                        else -> "GEOMETRY_TRIANGLE"
+                    val subjectTag = when {
+                        subject.contains("الرياضيات") || subject.contains("هندسة") -> "[صورة: مثلث قائم]"
+                        subject.contains("الفيزياء") -> "[صورة: دائرة كهربائية]"
+                        subject.contains("الكيمياء") -> "[صورة: ذرة]"
+                        subject.contains("الأحياء") || subject.contains("العلوم") -> "[صورة: نبتة]"
+                        else -> "[صورة: مثلث قائم]"
                     }
                     questions.add(
                         ExamQuestion(
                             id = i,
                             type = QuestionType.LABEL_DIAGRAM,
-                            text = "بالاستعانة بالرسم التوضيحي أدناه: اكتب البيانات والمصطلحات العلمية المشار إليها بالأرقام [1]، [2]، [3] بدقة.",
+                            text = "تأمل الشكل التوضيحي التالي ثم أجب عن المطلوب واكتب البيانات الأساسية عليه بدقة: $subjectTag",
                             options = emptyList(),
                             correctAnswer = "البيان [1]: المكون الأساسي، البيان [2]: الجزء الرابط، البيان [3]: الناتج النهائي المكتمل.",
                             score = scoreForThis,
-                            explanation = "تطبيق صفي مباشر على قراءة وتحليل الرسوم التوضيحية العلمية والهندسية.",
-                            diagramId = "diagram_$i",
-                            diagramType = dType,
-                            diagramInstruction = "اكتب البيانات الموضحة على الرسم بالأرقام [1]، [2]، [3]"
+                            explanation = "تطبيق صفي مباشر على قراءة وتحليل الرسوم التوضيحية العلمية والهندسية."
                         )
                     )
                 }
 
-                // 8) Math / Physics problem or Essay default
                 else -> {
                     questions.add(
                         ExamQuestion(
                             id = i,
                             type = QuestionType.MATH_PHYSICS_PROBLEM,
-                            text = "مسألة تطبيقية حول ($topic): احسب القيمة المطلوبة موضحاً خطوات الحل الرياضي والقوانين المستخدمة والوحدات الفيزيائية.",
+                            text = "مسألة تطبيقية حول ($topic): احسب القيمة المطلوبة موضحاً خطوات الحل الرياضي والقوانين المستخدمة والوحدات: [جدول بيانات 2×3]",
                             options = emptyList(),
                             correctAnswer = "خطوة 1: كتابة المعطيات والقانون المقرر.\nخطوة 2: التعويض المباشر بالأرقام.\nخطوة 3: استخراج الناتج النهائي مع كتابة وحدة القياس الصحيحة.",
                             score = scoreForThis,
-                            explanation = "خطوات حل نموذجية معتمدة في سلم التصحيح لوزارة التربية والتعليم."
+                            explanation = "خطوات حل نموذجية معتمدة في سلم التصحيح."
                         )
                     )
                 }
             }
         }
 
-        questions
+        com.example.ui.teacher.ExamPlaceholderParser.parseAndEnrichQuestions(questions)
+    }
+
+    private fun callGeminiForRichExam(
+        apiKey: String,
+        subject: String,
+        grade: String,
+        topic: String,
+        examType: String,
+        count: Int,
+        totalScore: Int,
+        difficulty: String,
+        selectedTypes: List<String>,
+        includeDiagrams: Boolean
+    ): List<ExamQuestion>? {
+        val prompt = """
+            أنت خبير تربوي ومصمم اختبارات رسمية للمناهج الدراسية بالجمهورية اليمنية.
+            صمم اختباراً دقيقاً ومنسقاً وفق المواصفات التالية:
+            - المادة: $subject
+            - الصف الدراسي: $grade
+            - الموضوع / الوحدة: $topic
+            - نوع الاختبار: $examType
+            - مستوى الصعوبة: $difficulty
+            - عدد الأسئلة المطلوب: $count
+            - مجموع الدرجات الكلي: $totalScore (تأكد أن مجموع درجات الأسئلة يساوي $totalScore تماماً)
+            - أنواع الأسئلة المفضلة: ${selectedTypes.joinToString("، ")}
+            - تضمين رسومات وجداول: ${if (includeDiagrams) "نعم، مهم جداً" else "حسب الحاجة"}
+
+            تعليمات مهمة حول العلامات (Placeholders):
+            عند الحاجة لرسومات توضيحية أو جداول في أي سؤال، ضع علامة (Placeholder) واضحة داخل نص السؤال مثل:
+            - [صورة: نبتة] أو [صورة: مثلث قائم] أو [صورة: دائرة كهربائية] أو [صورة: خلية حيوانية] أو [صورة: مجهر] أو [صورة: أسد] أو [صورة: مغناطيس] أو [صورة: ذرة]
+            - [جدول مقارنة] أو [جدول بيانات 3×3]
+            سيقوم التطبيق تلقائياً بتحويل هذه العلامات إلى رسومات وأيقونات وجداول فعلية داخل ورقة الاختبار.
+
+            أجب حصراً بصيغة JSON صالحة (JSON Object) بالشكل التالي:
+            {
+              "questions": [
+                {
+                  "id": 1,
+                  "type": "MULTIPLE_CHOICE | TRUE_FALSE | FILL_BLANKS | COMPARE | LABEL_DIAGRAM | DEFINITIONS | EXPLAIN_WHY | MATH_PHYSICS_PROBLEM | ESSAY",
+                  "text": "نص السؤال باللغة العربية وقد يتضمن [صورة: ...] أو [جدول مقارنة]",
+                  "options": ["أ) ...", "ب) ...", "ج) ...", "د) ..."],
+                  "correctAnswer": "الإجابة الصحيحة النموذجية",
+                  "score": 4,
+                  "explanation": "توزيع الدرجات وشرح الحل"
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val jsonRequest = JSONObject().apply {
+            put("contents", JSONArray().apply {
+                put(JSONObject().apply {
+                    put("parts", JSONArray().apply {
+                        put(JSONObject().apply { put("text", prompt) })
+                    })
+                })
+            })
+            put("generationConfig", JSONObject().apply {
+                put("temperature", 0.35)
+                put("responseMimeType", "application/json")
+            })
+        }
+
+        val requestBody = jsonRequest.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+        val models = listOf("gemini-2.5-flash", "gemini-1.5-flash")
+
+        for (model in models) {
+            val url = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey"
+            val request = Request.Builder().url(url).post(requestBody).build()
+            try {
+                httpClient.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        val rawBody = response.body?.string() ?: return@use
+                        val root = JSONObject(rawBody)
+                        val candidates = root.optJSONArray("candidates") ?: return@use
+                        if (candidates.length() > 0) {
+                            var textOut = candidates.getJSONObject(0)
+                                .getJSONObject("content")
+                                .getJSONArray("parts")
+                                .getJSONObject(0)
+                                .getString("text")
+                                .trim()
+
+                            if (textOut.startsWith("```json")) textOut = textOut.removePrefix("```json").trim()
+                            if (textOut.startsWith("```")) textOut = textOut.removePrefix("```").trim()
+                            if (textOut.endsWith("```")) textOut = textOut.removeSuffix("```").trim()
+
+                            val parsedObj = JSONObject(textOut)
+                            val arr = parsedObj.optJSONArray("questions") ?: return@use
+                            val list = mutableListOf<ExamQuestion>()
+                            for (i in 0 until arr.length()) {
+                                val item = arr.getJSONObject(i)
+                                val typeStr = item.optString("type", "ESSAY").uppercase()
+                                val qType = QuestionType.entries.firstOrNull { it.name == typeStr } ?: QuestionType.ESSAY
+                                val opts = mutableListOf<String>()
+                                val optsArr = item.optJSONArray("options")
+                                if (optsArr != null) {
+                                    for (j in 0 until optsArr.length()) {
+                                        val optVal = optsArr.optString(j)
+                                        if (optVal.isNotBlank()) opts.add(optVal)
+                                    }
+                                }
+                                list.add(
+                                    ExamQuestion(
+                                        id = item.optInt("id", i + 1),
+                                        type = qType,
+                                        text = item.optString("text", ""),
+                                        options = opts,
+                                        correctAnswer = item.optString("correctAnswer", ""),
+                                        score = item.optInt("score", 2).coerceAtLeast(1),
+                                        explanation = item.optString("explanation", "")
+                                    )
+                                )
+                            }
+                            if (list.isNotEmpty()) return list
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "callGeminiForRichExam error on $model: ${e.message}")
+            }
+        }
+        return null
     }
 
     /**

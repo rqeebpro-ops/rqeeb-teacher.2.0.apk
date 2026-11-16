@@ -14,7 +14,7 @@ import com.example.data.model.TeacherEntity
 object RqeebNotificationHelper {
 
     private const val CHANNEL_ID = "rqeeb_teacher_requests_channel"
-    private const val CHANNEL_NAME = "طلبات تفعيل المعلمين - رقيب"
+    private const val CHANNEL_NAME = "طلبات تفعيل المعلمين - المعلم التربوي الذكي"
 
     fun notifyNewTeacherRequest(context: Context, teacher: TeacherEntity) {
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -46,7 +46,7 @@ object RqeebNotificationHelper {
         val sec = if (teacher.section.isNotBlank()) " (شعبة ${teacher.section})" else ""
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setContentTitle("رقيب – طلب تفعيل جديد")
+            .setContentTitle("المعلم التربوي الذكي – طلب تفعيل جديد")
             .setContentText("المعلم: ${teacher.fullName} | مدرسة: ${teacher.schoolName}")
             .setStyle(
                 NotificationCompat.BigTextStyle().bigText(

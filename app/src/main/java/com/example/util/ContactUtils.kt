@@ -13,7 +13,7 @@ object ContactUtils {
         val phoneWithCountry = "967785502919"
         val encodedMsg = Uri.encode(
             if (customMessage.isNotBlank()) customMessage
-            else "السلام عليكم ورحمة الله، أتواصل معكم بخصوص تطبيق «رقيب – مساعد المعلم الذكي»."
+            else "السلام عليكم ورحمة الله، أتواصل معكم بخصوص تطبيق «المعلم التربوي الذكي»."
         )
         val url = "https://api.whatsapp.com/send?phone=$phoneWithCountry&text=$encodedMsg"
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {

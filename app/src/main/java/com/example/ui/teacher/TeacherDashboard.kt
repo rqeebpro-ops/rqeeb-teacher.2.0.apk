@@ -220,7 +220,7 @@ fun TeacherDashboard(
                         ) {
                             Image(
                                 painter = painterResource(id = R.drawable.img_app_logo),
-                                contentDescription = "شعار رقيب المعلم الذكي",
+                                contentDescription = "شعار المعلم التربوي الذكي",
                                 contentScale = ContentScale.Crop,
                                 modifier = Modifier
                                     .fillMaxSize()
@@ -230,7 +230,7 @@ fun TeacherDashboard(
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
                             Text(
-                                "رقيب - مساعد المعلم الذكي (اليمن)",
+                                "المعلم التربوي الذكي",
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                             )
                             val displayGrade = YemeniCurriculum.toDisplayGrade(activeTeacher.gradeTaught)
@@ -251,7 +251,7 @@ fun TeacherDashboard(
                                 ContactUtils.openTeacherWhatsApp(
                                     context,
                                     supportPhone,
-                                    "مرحباً إدارة تطبيق «رقيب – مساعد المعلم الذكي»، أنا الأستاذ ${activeTeacher.fullName}، أحتاج لمساعدة فنية."
+                                    "مرحباً إدارة تطبيق «المعلم التربوي الذكي»، أنا الأستاذ ${activeTeacher.fullName}، أحتاج لمساعدة فنية."
                                 )
                             }
                         },
@@ -259,7 +259,7 @@ fun TeacherDashboard(
                     ) {
                         Icon(
                             Icons.Default.SupportAgent,
-                            contentDescription = "تواصل مع إدارة رقيب (واتساب)",
+                            contentDescription = "تواصل مع إدارة المعلم التربوي الذكي (واتساب)",
                             tint = Color(0xFF059669)
                         )
                     }

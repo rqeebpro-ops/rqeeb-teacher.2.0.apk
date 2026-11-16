@@ -2,7 +2,12 @@ package com.example.ui.teacher
 
 import android.content.Context
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -23,14 +28,21 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.Image
@@ -43,6 +55,7 @@ import com.example.util.PrintUtils
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -54,12 +67,14 @@ fun YemeniPaperExamView(
     geminiService: GeminiService,
     onBack: () -> Unit,
     onExamUpdated: (ExamEntity, List<ExamQuestion>) -> Unit,
+    initialTemplateId: String? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    val customTemplates by repository.getCustomExamTemplatesFlow(teacher.id).collectAsState(initial = emptyList())
 
-    // 1) Current Exam Header State (Fully Editable by Teacher)
+    // 1) Current Exam Header & Layout Template State (Fully Editable by Teacher)
     var headerCountry by remember { mutableStateOf("الجمهورية اليمنية") }
     var headerMinistry by remember { mutableStateOf("وزارة التربية والتعليم والبحث العلمي") }
     var headerDirectorate by remember { mutableStateOf("مكتب التربية والتعليم") }
@@ -83,194 +98,409 @@ fun YemeniPaperExamView(
         try { Color(android.graphics.Color.parseColor(primaryColorHex)) } catch (_: Throwable) { Color(0xFF006874) }
     }
 
+    var activeTemplateId by remember { mutableStateOf(initialTemplateId ?: "monthly_official") }
+    var paperLayoutStyle by remember { mutableStateOf(PaperLayoutStyle.OFFICIAL_MONTHLY) }
+    var showSummaryTable by remember { mutableStateOf(true) }
+    var instructionsBannerText by remember { mutableStateOf("أجب مستعيناً بالله عن جميع الأسئلة التالية بخط جميل وواضح في نفس الورقة:") }
+
     // 2) Questions List State
     val questionsList = remember { mutableStateListOf<ExamQuestion>().apply { addAll(questions) } }
     var activeFormCode by remember { mutableStateOf("A") } // Form A, Form B, Form C
     var isAnswerKeyView by remember { mutableStateOf(false) }
 
-    // 3) Dialogs and BottomSheets
+    // 3) Dialogs, Rich Editor, Drag-and-Drop, Template Library & Print Preview State
     var showHeaderEditor by remember { mutableStateOf(false) }
     var showInteractiveCanvas by remember { mutableStateOf(false) }
     var showAddQuestionDialog by remember { mutableStateOf(false) }
     var showFormGeneratorDialog by remember { mutableStateOf(false) }
     var showSaveTemplateDialog by remember { mutableStateOf(false) }
+    var showTemplateLibraryModal by remember { mutableStateOf(false) }
     var editingQuestionIndex by remember { mutableIntStateOf(-1) }
     var isGeneratingSingleQuestion by remember { mutableIntStateOf(-1) }
 
-    val totalCalculatedScore = remember(questionsList) { questionsList.sumOf { it.score } }
+    var isPrintPreviewMode by remember { mutableStateOf(false) }
+    var showInsertTableModal by remember { mutableStateOf(false) }
+    var showGraphicsLibraryModal by remember { mutableStateOf(false) }
+    var targetQuestionIndexForInsert by remember { mutableIntStateOf(0) }
+    var inlineEditingQuestionIndex by remember { mutableIntStateOf(-1) }
+
+    // Drag & Drop State
+    var activeDragItem by remember { mutableStateOf<DragPaletteItem?>(null) }
+    var dragCurrentOffset by remember { mutableStateOf(Offset.Zero) }
+    var hoveredQuestionIndex by remember { mutableIntStateOf(-1) }
+    var rootBoxPosition by remember { mutableStateOf(Offset.Zero) }
+    val questionBoundsMap = remember { mutableStateMapOf<Int, Rect>() }
+
+    BackHandler(enabled = isPrintPreviewMode) {
+        isPrintPreviewMode = false
+    }
+
+    fun findHoveredQuestion(rootPoint: Offset): Int {
+        return questionBoundsMap.entries.firstOrNull { (_, rect) ->
+            rect.contains(rootPoint)
+        }?.key ?: -1
+    }
+
+    fun insertTableIntoQuestion(qIndex: Int, table: ExamTableBlock) {
+        if (questionsList.isEmpty()) return
+        val safeIdx = qIndex.coerceIn(0, questionsList.size - 1)
+        val q = questionsList[safeIdx]
+        questionsList[safeIdx] = q.copy(insertedTables = q.insertedTables + table)
+        Toast.makeText(context, "تم إدراج الجدول في السؤال ${safeIdx + 1}", Toast.LENGTH_SHORT).show()
+    }
+
+    fun insertGraphicIntoQuestion(qIndex: Int, graphic: ExamGraphicBlock) {
+        if (questionsList.isEmpty()) return
+        val safeIdx = qIndex.coerceIn(0, questionsList.size - 1)
+        val q = questionsList[safeIdx]
+        questionsList[safeIdx] = q.copy(insertedGraphics = q.insertedGraphics + graphic)
+        Toast.makeText(context, "تم إدراج (${graphic.label}) في السؤال ${safeIdx + 1}", Toast.LENGTH_SHORT).show()
+    }
+
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) {
+            if (questionsList.isEmpty()) {
+                Toast.makeText(context, "أضف سؤالاً أولاً لإرفاق الصورة به", Toast.LENGTH_SHORT).show()
+                return@rememberLauncherForActivityResult
+            }
+            val safeIdx = targetQuestionIndexForInsert.coerceIn(0, questionsList.size - 1)
+            val savedPath = ExamImageStorageHelper.savePickedImage(context, uri)
+            val imageBlock = ExamImageBlock(
+                localPath = savedPath ?: uri.toString(),
+                caption = "صورة مرفقة",
+                sizeDp = 140
+            )
+            val q = questionsList[safeIdx]
+            questionsList[safeIdx] = q.copy(insertedImages = q.insertedImages + imageBlock)
+            Toast.makeText(context, "تم إدراج الصورة في السؤال ${safeIdx + 1}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val totalCalculatedScore = remember(questionsList.toList()) { questionsList.sumOf { it.score } }
+
+    fun applyFormatTemplate(tpl: ExamPaperFormatTemplate, replaceQuestions: Boolean, showToast: Boolean = true) {
+        activeTemplateId = tpl.id
+        paperLayoutStyle = tpl.paperLayoutStyle
+        examTypeTitle = tpl.examTypeTitle
+        durationText = tpl.durationText
+        primaryColorHex = tpl.primaryColorHex
+        showEmblem = tpl.showEmblem
+        logoSizeDp = tpl.logoSizeDp
+        showSummaryTable = tpl.showSummaryTable
+        instructionsBannerText = tpl.instructionsText
+
+        if (replaceQuestions) {
+            questionsList.clear()
+            questionsList.addAll(
+                tpl.sampleQuestions.map { q ->
+                    q.copy(
+                        richStyle = q.richStyle.copy(
+                            fontSizeSp = tpl.questionFontSizeSp,
+                            isBold = tpl.boldQuestionHeader
+                        ),
+                        answerLinesCount = tpl.answerLinesCount
+                    )
+                }
+            )
+        } else {
+            val formatted = questionsList.map { q ->
+                q.copy(
+                    richStyle = q.richStyle.copy(
+                        fontSizeSp = tpl.questionFontSizeSp,
+                        isBold = tpl.boldQuestionHeader
+                    ),
+                    answerLinesCount = tpl.answerLinesCount
+                )
+            }
+            questionsList.clear()
+            questionsList.addAll(formatted)
+        }
+
+        if (showToast) {
+            val modeText = if (replaceQuestions) "وتحميل هيكل الأسئلة" else "على الورقة الحالية"
+            Toast.makeText(context, "تم تطبيق «${tpl.title}» $modeText تلقائياً!", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    LaunchedEffect(initialTemplateId) {
+        val tpl = ExamTemplateLibrary.findById(initialTemplateId)
+        if (tpl != null) {
+            applyFormatTemplate(tpl, replaceQuestions = false, showToast = false)
+        }
+    }
+
+    fun triggerPrintExam() {
+        val parsedMinutes = durationText.filter { it.isDigit() }.toIntOrNull() ?: exam.durationMinutes
+        PrintUtils.printExam(
+            context = context,
+            exam = exam.copy(
+                subject = subjectName,
+                schoolName = schoolName,
+                examType = examTypeTitle,
+                durationMinutes = parsedMinutes,
+                totalScore = totalCalculatedScore
+            ),
+            questions = questionsList.toList(),
+            isAnswerKey = isAnswerKeyView,
+            useOfficialMathTemplate = true,
+            customSchoolName = schoolName,
+            customDirectorate = directorateName,
+            customTeacherName = teacherName,
+            customGradeText = gradeText,
+            customAcademicYear = academicYear,
+            customExamDate = examDate,
+            customCountry = headerCountry,
+            customMinistry = headerMinistry
+        )
+    }
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(
-                            "محرر ورقة الاختبار الرسمية (قالب أوراق Yemen)",
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                        )
-                        Text(
-                            "المادة: $subjectName • الدرجة الكلية: $totalCalculatedScore / ${exam.totalScore}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack, modifier = Modifier.testTag("yemeni_paper_back_btn")) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "رجوع")
-                    }
-                },
-                actions = {
-                    // Save Exam State
-                    IconButton(
-                        onClick = {
-                            coroutineScope.launch {
-                                val updatedExam = exam.copy(
-                                    title = exam.title.ifBlank { "اختبار $subjectName" },
-                                    subject = subjectName,
-                                    schoolName = schoolName,
-                                    totalScore = totalCalculatedScore
+            if (!isPrintPreviewMode) {
+                TopAppBar(
+                    title = {
+                        Column {
+                            Text(
+                                "محرر ورقة الاختبار الرسمية A4",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                            )
+                            Text(
+                                "المادة: $subjectName • الدرجة الكلية: $totalCalculatedScore / ${exam.totalScore}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = onBack, modifier = Modifier.testTag("yemeni_paper_back_btn")) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "رجوع")
+                        }
+                    },
+                    actions = {
+                        // Save Exam State
+                        IconButton(
+                            onClick = {
+                                coroutineScope.launch {
+                                    val parsedMinutes = durationText.filter { it.isDigit() }.toIntOrNull() ?: exam.durationMinutes
+                                    val updatedExam = exam.copy(
+                                        title = exam.title.ifBlank { "اختبار $subjectName" },
+                                        subject = subjectName,
+                                        schoolName = schoolName,
+                                        examType = examTypeTitle,
+                                        durationMinutes = parsedMinutes,
+                                        totalScore = totalCalculatedScore
+                                    )
+                                    onExamUpdated(updatedExam, questionsList.toList())
+                                    Toast.makeText(context, "تم حفظ جميع تعديلات الاختبار والورقة بنجاح!", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            modifier = Modifier.testTag("save_paper_exam_btn")
+                        ) {
+                            Icon(Icons.Default.Save, contentDescription = "حفظ", tint = MaterialTheme.colorScheme.primary)
+                        }
+
+                        // Export Word
+                        IconButton(
+                            onClick = {
+                                val parsedMinutes = durationText.filter { it.isDigit() }.toIntOrNull() ?: exam.durationMinutes
+                                PrintUtils.exportExamToWord(
+                                    context = context,
+                                    exam = exam.copy(
+                                        subject = subjectName,
+                                        schoolName = schoolName,
+                                        examType = examTypeTitle,
+                                        durationMinutes = parsedMinutes,
+                                        totalScore = totalCalculatedScore
+                                    ),
+                                    questions = questionsList.toList(),
+                                    isAnswerKey = isAnswerKeyView,
+                                    useOfficialMathTemplate = true,
+                                    customSchoolName = schoolName,
+                                    customDirectorate = directorateName,
+                                    customTeacherName = teacherName,
+                                    customGradeText = gradeText,
+                                    customAcademicYear = academicYear,
+                                    customExamDate = examDate,
+                                    customCountry = headerCountry,
+                                    customMinistry = headerMinistry
                                 )
-                                onExamUpdated(updatedExam, questionsList.toList())
-                                Toast.makeText(context, "تم حفظ جميع تعديلات الاختبار والورقة بنجاح!", Toast.LENGTH_SHORT).show()
-                            }
-                        },
-                        modifier = Modifier.testTag("save_paper_exam_btn")
-                    ) {
-                        Icon(Icons.Default.Save, contentDescription = "حفظ", tint = MaterialTheme.colorScheme.primary)
-                    }
+                            },
+                            modifier = Modifier.testTag("export_paper_word_btn")
+                        ) {
+                            Icon(Icons.Default.Description, contentDescription = "تصدير Word", tint = Color(0xFF2563EB))
+                        }
 
-                    // Export Word
-                    IconButton(
-                        onClick = {
-                            PrintUtils.exportExamToWord(
-                                context = context,
-                                exam = exam.copy(subject = subjectName, schoolName = schoolName, totalScore = totalCalculatedScore),
-                                questions = questionsList.toList(),
-                                isAnswerKey = isAnswerKeyView,
-                                useOfficialMathTemplate = true,
-                                customSchoolName = schoolName,
-                                customDirectorate = directorateName,
-                                customTeacherName = teacherName,
-                                customGradeText = gradeText,
-                                customAcademicYear = academicYear,
-                                customExamDate = examDate,
-                                customCountry = headerCountry,
-                                customMinistry = headerMinistry
-                            )
-                        },
-                        modifier = Modifier.testTag("export_paper_word_btn")
-                    ) {
-                        Icon(Icons.Default.Description, contentDescription = "تصدير Word", tint = Color(0xFF2563EB))
-                    }
-
-                    // Print PDF
-                    IconButton(
-                        onClick = {
-                            PrintUtils.printExam(
-                                context = context,
-                                exam = exam.copy(subject = subjectName, schoolName = schoolName, totalScore = totalCalculatedScore),
-                                questions = questionsList.toList(),
-                                isAnswerKey = isAnswerKeyView,
-                                useOfficialMathTemplate = true,
-                                customSchoolName = schoolName,
-                                customDirectorate = directorateName,
-                                customTeacherName = teacherName,
-                                customGradeText = gradeText,
-                                customAcademicYear = academicYear,
-                                customExamDate = examDate,
-                                customCountry = headerCountry,
-                                customMinistry = headerMinistry
-                            )
-                        },
-                        modifier = Modifier.testTag("print_paper_pdf_btn")
-                    ) {
-                        Icon(Icons.Default.Print, contentDescription = "طباعة / PDF", tint = Color(0xFF006874))
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
-            )
+                        // Print PDF
+                        IconButton(
+                            onClick = { triggerPrintExam() },
+                            modifier = Modifier.testTag("print_paper_pdf_btn")
+                        ) {
+                            Icon(Icons.Default.Print, contentDescription = "طباعة / PDF", tint = Color(0xFF006874))
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
+                )
+            }
         },
         modifier = modifier
     ) { innerPadding ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .background(Color(0xFFE2E8F0))
+                .onGloballyPositioned { coords ->
+                    rootBoxPosition = coords.positionInRoot()
+                }
         ) {
-            // Action Control Strip (View Modes, Header Editor, Forms, Add Question)
-            Surface(
-                shadowElevation = 2.dp,
-                color = MaterialTheme.colorScheme.surface,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    // Row 1: Mode Tabs
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        FilterChip(
-                            selected = !isAnswerKeyView,
-                            onClick = { isAnswerKeyView = false },
-                            label = { Text("📄 ورقة الطالب", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
-                            modifier = Modifier.weight(1f)
-                        )
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(if (isPrintPreviewMode) Color.White else Color(0xFFE2E8F0))
+        ) {
+            // Top Editor Toolbar above A4 paper (Template Library, Insert Table, Upload Image, Graphics Library, Print, Drag-and-Drop Strip)
+            ExamTopEditorToolbar(
+                isPrintPreviewMode = isPrintPreviewMode,
+                onInsertTableClick = {
+                    targetQuestionIndexForInsert = if (inlineEditingQuestionIndex >= 0) inlineEditingQuestionIndex else 0
+                    showInsertTableModal = true
+                },
+                onUploadImageClick = {
+                    targetQuestionIndexForInsert = if (inlineEditingQuestionIndex >= 0) inlineEditingQuestionIndex else 0
+                    photoPickerLauncher.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                    )
+                },
+                onGraphicsLibraryClick = {
+                    targetQuestionIndexForInsert = if (inlineEditingQuestionIndex >= 0) inlineEditingQuestionIndex else 0
+                    showGraphicsLibraryModal = true
+                },
+                onTemplateLibraryClick = { showTemplateLibraryModal = true },
+                onPrintClick = { triggerPrintExam() },
+                onTogglePrintPreview = {
+                    isPrintPreviewMode = !isPrintPreviewMode
+                    inlineEditingQuestionIndex = -1
+                },
+                onStartDrag = { item, rootOffset ->
+                    activeDragItem = item
+                    dragCurrentOffset = rootOffset
+                    hoveredQuestionIndex = findHoveredQuestion(rootOffset)
+                },
+                onDragMove = { delta ->
+                    dragCurrentOffset += delta
+                    hoveredQuestionIndex = findHoveredQuestion(dragCurrentOffset)
+                },
+                onDragEnd = {
+                    val item = activeDragItem
+                    val dropIdx = hoveredQuestionIndex
+                    if (item != null && dropIdx in questionsList.indices) {
+                        when (item) {
+                            is DragPaletteItem.TablePreset -> {
+                                val table = ExamPlaceholderParser.createEmptyTable(item.rows, item.cols, item.title)
+                                insertTableIntoQuestion(dropIdx, table)
+                            }
+                            is DragPaletteItem.GraphicPreset -> {
+                                val g = ExamGraphicsLibrary.toGraphicBlock(item.template)
+                                insertGraphicIntoQuestion(dropIdx, g)
+                            }
+                        }
+                    } else if (item != null) {
+                        Toast.makeText(context, "أفلت العنصر فوق أحد صناديق الأسئلة لإدراجه", Toast.LENGTH_SHORT).show()
+                    }
+                    activeDragItem = null
+                    hoveredQuestionIndex = -1
+                },
+                onDragCancel = {
+                    activeDragItem = null
+                    hoveredQuestionIndex = -1
+                }
+            )
 
-                        FilterChip(
-                            selected = isAnswerKeyView,
-                            onClick = { isAnswerKeyView = true },
-                            label = { Text("🔑 نموذج الإجابة وسلّم الدرجات", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
-                            modifier = Modifier.weight(1.3f)
-                        )
-
-                        // Form Selector Badges (Form A, B, C)
-                        listOf("A", "B", "C").forEach { code ->
+            // Secondary Action Control Strip (hidden completely during Print Preview Mode)
+            if (!isPrintPreviewMode) {
+                Surface(
+                    shadowElevation = 2.dp,
+                    color = MaterialTheme.colorScheme.surface,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        // Row 1: Mode Tabs
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
                             FilterChip(
-                                selected = activeFormCode == code,
-                                onClick = { activeFormCode = code },
-                                label = { Text("نموذج $code", fontSize = 11.sp) }
+                                selected = !isAnswerKeyView,
+                                onClick = { isAnswerKeyView = false },
+                                label = { Text("📄 ورقة الطالب", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                                modifier = Modifier.weight(1f)
+                            )
+
+                            FilterChip(
+                                selected = isAnswerKeyView,
+                                onClick = { isAnswerKeyView = true },
+                                label = { Text("🔑 نموذج الإجابة وسلّم الدرجات", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                                modifier = Modifier.weight(1.3f)
+                            )
+
+                            // Form Selector Badges (Form A, B, C)
+                            listOf("A", "B", "C").forEach { code ->
+                                FilterChip(
+                                    selected = activeFormCode == code,
+                                    onClick = { activeFormCode = code },
+                                    label = { Text("نموذج $code", fontSize = 11.sp) }
+                                )
+                            }
+                        }
+
+                        // Row 2: Editor Actions + Active Template Badge
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            AssistChip(
+                                onClick = { showTemplateLibraryModal = true },
+                                label = {
+                                    val activeTitle = ExamTemplateLibrary.findById(activeTemplateId)?.title ?: paperLayoutStyle.arabicLabel
+                                    Text("📐 القالب: $activeTitle", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                },
+                                leadingIcon = { Icon(Icons.Default.DashboardCustomize, contentDescription = null, modifier = Modifier.size(14.dp), tint = primaryColor) },
+                                modifier = Modifier.testTag("active_template_chip")
+                            )
+
+                            AssistChip(
+                                onClick = { showInteractiveCanvas = true },
+                                label = { Text("🎨 السحب والمحاذاة التفاعلية (Canvas)", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
+                                leadingIcon = { Icon(Icons.Default.TouchApp, contentDescription = null, modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.primary) },
+                                modifier = Modifier.testTag("open_interactive_canvas_chip")
+                            )
+
+                            AssistChip(
+                                onClick = { showHeaderEditor = true },
+                                label = { Text("✏️ تعديل الترويسة والشعار", fontSize = 11.sp) },
+                                leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(14.dp)) }
+                            )
+
+                            AssistChip(
+                                onClick = { showAddQuestionDialog = true },
+                                label = { Text("➕ إضافة سؤال جديد", fontSize = 11.sp) },
+                                leadingIcon = { Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(14.dp)) }
+                            )
+
+                            AssistChip(
+                                onClick = { showFormGeneratorDialog = true },
+                                label = { Text("🔀 توليد نماذج متكافئة (أ/ب/ج)", fontSize = 11.sp) },
+                                leadingIcon = { Icon(Icons.Default.Shuffle, contentDescription = null, modifier = Modifier.size(14.dp)) }
+                            )
+
+                            AssistChip(
+                                onClick = { showSaveTemplateDialog = true },
+                                label = { Text("💾 حفظ كقالب خاص بي", fontSize = 11.sp) },
+                                leadingIcon = { Icon(Icons.Default.Bookmark, contentDescription = null, modifier = Modifier.size(14.dp)) }
                             )
                         }
-                    }
-
-                    // Row 2: Editor Actions
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        AssistChip(
-                            onClick = { showInteractiveCanvas = true },
-                            label = { Text("🎨 السحب والمحاذاة التفاعلية (Canvas)", fontSize = 11.sp, fontWeight = FontWeight.Bold) },
-                            leadingIcon = { Icon(Icons.Default.TouchApp, contentDescription = null, modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.primary) },
-                            modifier = Modifier.testTag("open_interactive_canvas_chip")
-                        )
-
-                        AssistChip(
-                            onClick = { showHeaderEditor = true },
-                            label = { Text("✏️ تعديل الترويسة والشعار", fontSize = 11.sp) },
-                            leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(14.dp)) }
-                        )
-
-                        AssistChip(
-                            onClick = { showAddQuestionDialog = true },
-                            label = { Text("➕ إضافة سؤال جديد", fontSize = 11.sp) },
-                            leadingIcon = { Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(14.dp)) }
-                        )
-
-                        AssistChip(
-                            onClick = { showFormGeneratorDialog = true },
-                            label = { Text("🔀 توليد نماذج متكافئة (أ/ب/ج)", fontSize = 11.sp) },
-                            leadingIcon = { Icon(Icons.Default.Shuffle, contentDescription = null, modifier = Modifier.size(14.dp)) }
-                        )
-
-                        AssistChip(
-                            onClick = { showSaveTemplateDialog = true },
-                            label = { Text("💾 حفظ كقالب خاص بي", fontSize = 11.sp) },
-                            leadingIcon = { Icon(Icons.Default.Bookmark, contentDescription = null, modifier = Modifier.size(14.dp)) }
-                        )
                     }
                 }
             }
@@ -296,15 +526,27 @@ fun YemeniPaperExamView(
             // Scrollable Live A4 Paper Sheet Canvas
             Box(
                 modifier = Modifier
-                    .fillMaxSize()
+                    .weight(1f)
+                    .fillMaxWidth()
                     .verticalScroll(rememberScrollState())
-                    .padding(12.dp)
+                    .padding(if (isPrintPreviewMode) 6.dp else 12.dp)
             ) {
-                // A4 Paper Container matching attached visual
+                // White Official A4 Paper Container (Adapts frame & borders to selected PaperLayoutStyle)
+                val outerCornerDp = when {
+                    isPrintPreviewMode -> 0.dp
+                    paperLayoutStyle == PaperLayoutStyle.WORKSHEET_MODERN -> 14.dp
+                    else -> 6.dp
+                }
+                val outerBorderColor = if (paperLayoutStyle == PaperLayoutStyle.WORKSHEET_MODERN && !isPrintPreviewMode) {
+                    primaryColor
+                } else {
+                    Color.Black
+                }
                 Card(
-                    shape = RoundedCornerShape(16.dp),
+                    shape = RoundedCornerShape(outerCornerDp),
                     colors = CardDefaults.cardColors(containerColor = Color.White),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                    border = BorderStroke(if (paperLayoutStyle == PaperLayoutStyle.MINISTRY_FINAL) 2.5.dp else 2.dp, outerBorderColor),
+                    elevation = CardDefaults.cardElevation(defaultElevation = if (isPrintPreviewMode) 0.dp else 4.dp),
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(bottom = 24.dp)
@@ -313,36 +555,47 @@ fun YemeniPaperExamView(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(14.dp),
+                            .then(
+                                if (paperLayoutStyle == PaperLayoutStyle.MINISTRY_FINAL) {
+                                    Modifier
+                                        .padding(4.dp)
+                                        .border(1.dp, Color.Black)
+                                        .padding(10.dp)
+                                } else {
+                                    Modifier.padding(14.dp)
+                                }
+                            ),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        // Quick Edit Header Toolbar Banner
-                        Surface(
-                            shape = RoundedCornerShape(10.dp),
-                            color = primaryColor.copy(alpha = 0.1f),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, primaryColor),
-                            modifier = Modifier.fillMaxWidth().clickable { showHeaderEditor = true }
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
+                        // Quick Edit Header Toolbar Banner (hidden when printing / in Print Preview)
+                        if (!isPrintPreviewMode) {
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = primaryColor.copy(alpha = 0.08f),
+                                border = BorderStroke(1.dp, primaryColor),
+                                modifier = Modifier.fillMaxWidth().clickable { showHeaderEditor = true }
                             ) {
-                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    Icon(Icons.Default.Edit, contentDescription = null, tint = primaryColor, modifier = Modifier.size(16.dp))
-                                    Text("الترويسة الرسمية قابلة للتعديل بالكامل (اسم المدرسة، المادة، المعلم...)", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = primaryColor)
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Icon(Icons.Default.Edit, contentDescription = null, tint = primaryColor, modifier = Modifier.size(16.dp))
+                                        Text("انقر على الترويسة للتعديل، أو اختر تنسيقاً من «مكتبة القوالب»", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = primaryColor)
+                                    }
+                                    Text(
+                                        "تعديل ✏️",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = primaryColor,
+                                        modifier = Modifier.padding(horizontal = 6.dp)
+                                    )
                                 }
-                                Text(
-                                    "تعديل ✏️",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = primaryColor,
-                                    modifier = Modifier.padding(horizontal = 6.dp)
-                                )
                             }
                         }
 
-                        // Decorative Corner Accent Header Frame
+                        // Paper Header Frame adapting to selected PaperLayoutStyle
                         YemeniOfficialPaperHeader(
                             headerCountry = headerCountry,
                             headerMinistry = headerMinistry,
@@ -362,42 +615,73 @@ fun YemeniPaperExamView(
                             logoType = logoType,
                             showEmblem = showEmblem,
                             logoSizeDp = logoSizeDp,
-                            primaryColor = primaryColor,
+                            primaryColor = if (isPrintPreviewMode) Color.Black else primaryColor,
                             isAnswerKeyView = isAnswerKeyView,
                             activeFormCode = activeFormCode,
-                            onEditHeader = { showHeaderEditor = true }
+                            isPrintPreviewMode = isPrintPreviewMode,
+                            paperLayoutStyle = paperLayoutStyle,
+                            onEditHeader = { if (!isPrintPreviewMode) showHeaderEditor = true }
                         )
 
                         Spacer(modifier = Modifier.height(4.dp))
 
-                        // Instructions / Banner Row
+                        // Official Instructions Row (Black Bordered White A4 Style)
                         Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = primaryColor.copy(alpha = 0.08f),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, primaryColor.copy(alpha = 0.3f)),
+                            shape = RoundedCornerShape(4.dp),
+                            color = if (paperLayoutStyle == PaperLayoutStyle.WORKSHEET_MODERN && !isPrintPreviewMode) primaryColor.copy(alpha = 0.08f) else Color.White,
+                            border = BorderStroke(1.5.dp, Color.Black),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(
-                                "أجب مستعيناً بالله عن جميع الأسئلة التالية بخط جميل وواضح في نفس الورقة:",
+                                instructionsBannerText,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = primaryColor,
+                                color = Color.Black,
                                 textAlign = TextAlign.Center,
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
                             )
                         }
 
-                        // Question Containers (Matching reference image blocks)
+                        // Question Containers (Black Bordered A4 + Drag Target + Inline Editing + Rich Attachments)
                         questionsList.forEachIndexed { idx, question ->
                             YemeniQuestionBox(
                                 index = idx,
                                 question = question,
                                 isAnswerKeyView = isAnswerKeyView,
-                                primaryColor = primaryColor,
+                                isPrintPreviewMode = isPrintPreviewMode,
+                                isInlineEditing = (inlineEditingQuestionIndex == idx && !isPrintPreviewMode),
+                                isDropTarget = (hoveredQuestionIndex == idx && activeDragItem != null),
+                                primaryColor = if (isPrintPreviewMode) Color.Black else primaryColor,
                                 isGeneratingSingle = isGeneratingSingleQuestion == idx,
+                                modifier = Modifier.onGloballyPositioned { coords ->
+                                    questionBoundsMap[idx] = coords.boundsInRoot()
+                                },
+                                onToggleInlineEdit = {
+                                    if (!isPrintPreviewMode) {
+                                        inlineEditingQuestionIndex = if (inlineEditingQuestionIndex == idx) -1 else idx
+                                    }
+                                },
+                                onUpdateQuestion = { updated ->
+                                    questionsList[idx] = updated
+                                },
+                                onOpenInsertTable = {
+                                    targetQuestionIndexForInsert = idx
+                                    showInsertTableModal = true
+                                },
+                                onOpenInsertImage = {
+                                    targetQuestionIndexForInsert = idx
+                                    photoPickerLauncher.launch(
+                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                    )
+                                },
+                                onOpenGraphicsLibrary = {
+                                    targetQuestionIndexForInsert = idx
+                                    showGraphicsLibraryModal = true
+                                },
                                 onEditQuestion = { editingQuestionIndex = idx },
                                 onDeleteQuestion = {
                                     questionsList.removeAt(idx)
+                                    if (inlineEditingQuestionIndex == idx) inlineEditingQuestionIndex = -1
                                     Toast.makeText(context, "تم حذف السؤال ${idx + 1}", Toast.LENGTH_SHORT).show()
                                 },
                                 onMoveUp = {
@@ -425,7 +709,8 @@ fun YemeniPaperExamView(
                                                 totalScore = question.score,
                                                 difficulty = exam.difficulty,
                                                 selectedTypes = listOf(question.type.toArabicName()),
-                                                includeDiagrams = true
+                                                includeDiagrams = true,
+                                                context = context
                                             )
                                             val newQ = newQs.firstOrNull()
                                             if (newQ != null) {
@@ -442,22 +727,24 @@ fun YemeniPaperExamView(
                             )
                         }
 
-                        Spacer(modifier = Modifier.height(8.dp))
+                        if (showSummaryTable) {
+                            Spacer(modifier = Modifier.height(8.dp))
 
-                        // Bottom Summary Score Table (Matching Bottom of Attached Reference Image)
-                        YemeniScoreSummaryTable(
-                            questions = questionsList.toList(),
-                            primaryColor = primaryColor
-                        )
+                            // Bottom Summary Score Table (Black Bordered Official A4 Style)
+                            YemeniScoreSummaryTable(
+                                questions = questionsList.toList(),
+                                primaryColor = Color.Black
+                            )
+                        }
 
                         Spacer(modifier = Modifier.height(10.dp))
 
-                        // Page Footer Matching Reference Image
+                        // Page Footer
                         Text(
                             "الصفحة 1 من 1   •   « انتهت الأسئلة • مع تمنياتنا لكم بالتوفيق والنجاح »",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
-                            color = Color(0xFF334155),
+                            color = Color.Black,
                             textAlign = TextAlign.Center,
                             modifier = Modifier.fillMaxWidth()
                         )
@@ -465,6 +752,96 @@ fun YemeniPaperExamView(
                 }
             }
         }
+
+        // Floating Drag Ghost Overlay following the teacher's finger
+        val currentDrag = activeDragItem
+        if (currentDrag != null) {
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.primary,
+                shadowElevation = 10.dp,
+                border = BorderStroke(1.5.dp, Color.White),
+                modifier = Modifier.offset {
+                    IntOffset(
+                        (dragCurrentOffset.x - rootBoxPosition.x - 100f).roundToInt(),
+                        (dragCurrentOffset.y - rootBoxPosition.y - 60f).roundToInt()
+                    )
+                }
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(currentDrag.badgeEmoji, fontSize = 18.sp)
+                    Column {
+                        Text(currentDrag.displayLabel, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Text(
+                            if (hoveredQuestionIndex >= 0) "إفلات في السؤال ${hoveredQuestionIndex + 1}" else "اسحب فوق أحد الأسئلة",
+                            color = Color.White.copy(alpha = 0.85f),
+                            fontSize = 10.sp
+                        )
+                    }
+                }
+            }
+        }
+        }
+    }
+
+    // 0) Insert Table Modal
+    if (showInsertTableModal) {
+        InsertTableModalDialog(
+            questions = questionsList.toList(),
+            defaultTargetIndex = targetQuestionIndexForInsert,
+            onDismiss = { showInsertTableModal = false },
+            onConfirmInsert = { qIdx, table ->
+                insertTableIntoQuestion(qIdx, table)
+                showInsertTableModal = false
+            }
+        )
+    }
+
+    // 0b) Graphics Library Modal
+    if (showGraphicsLibraryModal) {
+        GraphicsLibraryModalDialog(
+            questions = questionsList.toList(),
+            defaultTargetIndex = targetQuestionIndexForInsert,
+            onDismiss = { showGraphicsLibraryModal = false },
+            onInsertGraphic = { qIdx, graphic ->
+                insertGraphicIntoQuestion(qIdx, graphic)
+                showGraphicsLibraryModal = false
+            }
+        )
+    }
+
+    // 0c) Template Library Modal
+    if (showTemplateLibraryModal) {
+        TemplateLibraryModalDialog(
+            activeTemplateId = activeTemplateId,
+            customTemplates = customTemplates,
+            onDismiss = { showTemplateLibraryModal = false },
+            onApplyFormatTemplate = { tpl, replaceQuestions ->
+                applyFormatTemplate(tpl, replaceQuestions = replaceQuestions)
+                showTemplateLibraryModal = false
+            },
+            onApplyCustomTemplate = { custom ->
+                activeTemplateId = "custom_${custom.id}"
+                headerCountry = custom.countryName.ifBlank { headerCountry }
+                headerMinistry = custom.ministryName.ifBlank { headerMinistry }
+                directorateName = custom.directorateName.ifBlank { directorateName }
+                schoolName = custom.schoolName.ifBlank { schoolName }
+                primaryColorHex = custom.primaryColorHex.ifBlank { primaryColorHex }
+                showSummaryTable = custom.showSummaryTable
+                showTemplateLibraryModal = false
+                Toast.makeText(context, "تم تطبيق القالب المخصص «${custom.templateName}»!", Toast.LENGTH_SHORT).show()
+            },
+            onDeleteCustomTemplate = { custom ->
+                coroutineScope.launch {
+                    repository.deleteCustomExamTemplate(custom)
+                    Toast.makeText(context, "تم حذف القالب «${custom.templateName}»", Toast.LENGTH_SHORT).show()
+                }
+            }
+        )
     }
 
     // 1) Header & Logo Editor Dialog (Full Teacher Customization)
@@ -609,6 +986,18 @@ fun YemeniPaperExamView(
                         Switch(
                             checked = showEmblem,
                             onCheckedChange = { showEmblem = it }
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("إظهار جدول الدرجات الختامي أسفل الورقة", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Switch(
+                            checked = showSummaryTable,
+                            onCheckedChange = { showSummaryTable = it }
                         )
                     }
 
@@ -781,8 +1170,7 @@ fun YemeniPaperExamView(
                 Button(
                     onClick = {
                         val opts = optionsText.split("\n").map { it.trim() }.filter { it.isNotBlank() }
-                        val updated = ExamQuestion(
-                            id = q.id,
+                        val updated = q.copy(
                             type = qType,
                             text = qText,
                             options = opts,
@@ -907,7 +1295,8 @@ fun YemeniPaperExamView(
                                 directorateName = directorateName,
                                 schoolName = schoolName,
                                 logoType = logoType,
-                                primaryColorHex = primaryColorHex
+                                primaryColorHex = primaryColorHex,
+                                showSummaryTable = showSummaryTable
                             )
                             repository.insertCustomExamTemplate(template)
                             showSaveTemplateDialog = false
@@ -953,114 +1342,238 @@ private fun YemeniOfficialPaperHeader(
     primaryColor: Color,
     isAnswerKeyView: Boolean,
     activeFormCode: String,
+    isPrintPreviewMode: Boolean = false,
+    paperLayoutStyle: PaperLayoutStyle = PaperLayoutStyle.OFFICIAL_MONTHLY,
     onEditHeader: () -> Unit
 ) {
+    val borderStrokeColor = Color.Black
+    val boxBgColor = if (isPrintPreviewMode) Color.White else Color(0xFFF8FAFC)
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onEditHeader() }
+            .then(if (!isPrintPreviewMode) Modifier.clickable { onEditHeader() } else Modifier)
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // Right Cell: Republic & Ministry Box
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                border = androidx.compose.foundation.BorderStroke(1.5.dp, primaryColor),
-                color = Color(0xFFF1F5F9),
-                modifier = Modifier.weight(1.1f)
-            ) {
-                Column(
-                    modifier = Modifier.padding(8.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    Text(headerCountry, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = primaryColor)
-                    Text(headerMinistry, fontSize = 9.5.sp, fontWeight = FontWeight.Bold, color = Color.Black, textAlign = TextAlign.Center)
-                    Text(headerDirectorate, fontSize = 9.5.sp, color = Color(0xFF334155))
-                    Text("مديرية : $directorateName", fontSize = 9.5.sp, color = Color.Black)
-                    Text("المدرسة : $schoolName", fontSize = 10.5.sp, fontWeight = FontWeight.Bold, color = primaryColor, textAlign = TextAlign.Center)
-                    if (teacherName.isNotBlank()) {
-                        Text("أستاذ المادة: $teacherName", fontSize = 9.5.sp, color = Color(0xFF1E293B))
-                    }
-                }
-            }
-
-            // Center Cell: Eagle Logo & Subject Title
-            Column(
-                modifier = Modifier.weight(1.2f),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
-            ) {
-                if (showEmblem) {
-                    GoldenEagleLogo(
-                        modifier = Modifier
-                            .size(logoSizeDp.dp)
-                            .padding(bottom = 2.dp)
-                    )
-                }
-
+        when (paperLayoutStyle) {
+            PaperLayoutStyle.COMPACT_QUIZ -> {
+                // Streamlined 2-Row Compact Header for Quick Quizzes
                 Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = primaryColor.copy(alpha = 0.1f),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, primaryColor),
+                    shape = RoundedCornerShape(6.dp),
+                    border = BorderStroke(1.5.dp, borderStrokeColor),
+                    color = Color.White,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(
-                            "اختبار مادة : $subjectName",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = primaryColor,
-                            textAlign = TextAlign.Center
-                        )
-                        if (academicYear.isNotBlank()) {
-                            Text(
-                                "للعام الدراسي: $academicYear",
-                                fontSize = 9.5.sp,
-                                color = Color(0xFF334155),
-                                textAlign = TextAlign.Center
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = primaryColor
+                    Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                "$examTypeTitle (نموذج $activeFormCode)",
-                                fontSize = 9.5.sp,
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("$schoolName • $directorateName", fontSize = 10.sp, color = Color.DarkGray, fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    "$examTypeTitle — مادة: $subjectName",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isPrintPreviewMode) Color.Black else primaryColor
+                                )
+                            }
+                            if (showEmblem) {
+                                GoldenEagleLogo(modifier = Modifier.size(logoSizeDp.dp))
+                            }
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = if (isPrintPreviewMode) Color(0xFFF1F5F9) else primaryColor,
+                                border = BorderStroke(1.dp, Color.Black)
+                            ) {
+                                Text(
+                                    "نموذج $activeFormCode • $durationText",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isPrintPreviewMode) Color.Black else Color.White,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+
+                        HorizontalDivider(color = Color.Black, thickness = 1.dp)
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("اسم الطالب: ${studentNamePlaceholder.take(26)}", fontSize = 10.sp, color = Color.Black, modifier = Modifier.weight(1.4f))
+                            Text("الصف: $gradeText ($sectionText)", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color.Black, modifier = Modifier.weight(1f))
+                            Text("التاريخ: $examDate", fontSize = 10.sp, color = Color.Black)
                         }
                     }
                 }
             }
 
-            // Left Cell: Date, Student, Subject, Duration Box
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                border = androidx.compose.foundation.BorderStroke(1.5.dp, primaryColor),
-                color = Color(0xFFF1F5F9),
-                modifier = Modifier.weight(1.1f)
-            ) {
-                Column(
-                    modifier = Modifier.padding(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(3.dp)
+            PaperLayoutStyle.WORKSHEET_MODERN -> {
+                // Modern Interactive Worksheet Ribbon Header
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (isPrintPreviewMode) Color(0xFFF1F5F9) else primaryColor,
+                    border = BorderStroke(1.5.dp, Color.Black),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("اسم الطالب: ${studentNamePlaceholder.ifBlank { "..................................................." }}", fontSize = 9.5.sp, maxLines = 1)
-                    Text("التاريخ : ${examDate.ifBlank { "..... / ..... / 2026م" }}", fontSize = 9.5.sp, fontWeight = FontWeight.Bold)
-                    Text("الفترة : ${periodText.ifBlank { "...................." }}", fontSize = 9.5.sp, fontWeight = FontWeight.Bold)
-                    Text("الصف : $gradeText (${sectionText.ifBlank { "...................." }})", fontSize = 9.5.sp, fontWeight = FontWeight.Bold, color = primaryColor)
-                    Text("المادة : ${subjectName.ifBlank { "...................." }}", fontSize = 9.5.sp, color = Color.Black)
-                    Text("الزمن : ${durationText.ifBlank { "...................." }}", fontSize = 9.5.sp, color = Color.Black)
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "$examTypeTitle — $subjectName ($gradeText)",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isPrintPreviewMode) Color.Black else Color.White
+                            )
+                            Text(
+                                "$schoolName • أستاذ المادة: $teacherName",
+                                fontSize = 10.sp,
+                                color = if (isPrintPreviewMode) Color.DarkGray else Color.White.copy(alpha = 0.9f)
+                            )
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = Color.White,
+                            border = BorderStroke(1.dp, Color.Black)
+                        ) {
+                            Text(
+                                "الزمن: $durationText",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.Black,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    border = BorderStroke(1.dp, Color.Black),
+                    color = Color.White,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("اسم الطالب: ${studentNamePlaceholder.take(28)}", fontSize = 10.sp, color = Color.Black)
+                        Text("الشعبة: $sectionText • التاريخ: $examDate", fontSize = 10.sp, color = Color.Black)
+                    }
+                }
+            }
+
+            else -> {
+                // Official 3-Column Ministerial / Monthly Header
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Right Cell: Republic & Ministry Box
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        border = BorderStroke(1.5.dp, borderStrokeColor),
+                        color = boxBgColor,
+                        modifier = Modifier.weight(1.1f)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(8.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Text(headerCountry, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.Black)
+                            Text(headerMinistry, fontSize = 9.5.sp, fontWeight = FontWeight.Bold, color = Color.Black, textAlign = TextAlign.Center)
+                            Text(headerDirectorate, fontSize = 9.5.sp, color = Color.Black)
+                            Text("مديرية : $directorateName", fontSize = 9.5.sp, color = Color.Black)
+                            Text("المدرسة : $schoolName", fontSize = 10.5.sp, fontWeight = FontWeight.Bold, color = if (isPrintPreviewMode) Color.Black else primaryColor, textAlign = TextAlign.Center)
+                            if (teacherName.isNotBlank()) {
+                                Text("أستاذ المادة: $teacherName", fontSize = 9.5.sp, color = Color.Black)
+                            }
+                        }
+                    }
+
+                    // Center Cell: Eagle Logo & Subject Title
+                    Column(
+                        modifier = Modifier.weight(1.2f),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        if (showEmblem) {
+                            GoldenEagleLogo(
+                                modifier = Modifier
+                                    .size(logoSizeDp.dp)
+                                    .padding(bottom = 2.dp)
+                            )
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = Color.White,
+                            border = BorderStroke(1.5.dp, borderStrokeColor),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text(
+                                    "اختبار مادة : $subjectName",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.Black,
+                                    textAlign = TextAlign.Center
+                                )
+                                if (academicYear.isNotBlank()) {
+                                    Text(
+                                        "للعام الدراسي: $academicYear",
+                                        fontSize = 9.5.sp,
+                                        color = Color.Black,
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(4.dp),
+                                    color = if (isPrintPreviewMode) Color(0xFFF1F5F9) else primaryColor,
+                                    border = if (isPrintPreviewMode) BorderStroke(1.dp, Color.Black) else null
+                                ) {
+                                    Text(
+                                        "$examTypeTitle (نموذج $activeFormCode)",
+                                        fontSize = 9.5.sp,
+                                        color = if (isPrintPreviewMode) Color.Black else Color.White,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Left Cell: Date, Student, Subject, Duration Box
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        border = BorderStroke(1.5.dp, borderStrokeColor),
+                        color = boxBgColor,
+                        modifier = Modifier.weight(1.1f)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(3.dp)
+                        ) {
+                            Text("اسم الطالب: ${studentNamePlaceholder.ifBlank { "..................................................." }}", fontSize = 9.5.sp, maxLines = 1, color = Color.Black)
+                            Text("التاريخ : ${examDate.ifBlank { "..... / ..... / 2026م" }}", fontSize = 9.5.sp, fontWeight = FontWeight.Bold, color = Color.Black)
+                            Text("الفترة : ${periodText.ifBlank { "...................." }}", fontSize = 9.5.sp, fontWeight = FontWeight.Bold, color = Color.Black)
+                            Text("الصف : $gradeText (${sectionText.ifBlank { "...................." }})", fontSize = 9.5.sp, fontWeight = FontWeight.Bold, color = Color.Black)
+                            Text("المادة : ${subjectName.ifBlank { "...................." }}", fontSize = 9.5.sp, color = Color.Black)
+                            Text("الزمن : ${durationText.ifBlank { "...................." }}", fontSize = 9.5.sp, color = Color.Black)
+                        }
+                    }
                 }
             }
         }
@@ -1070,7 +1583,7 @@ private fun YemeniOfficialPaperHeader(
             Surface(
                 shape = RoundedCornerShape(6.dp),
                 color = Color(0xFFDCFCE7),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF16A34A)),
+                border = BorderStroke(1.dp, Color(0xFF16A34A)),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text(
@@ -1087,7 +1600,8 @@ private fun YemeniOfficialPaperHeader(
 }
 
 /**
- * Question Box Block matching the reference image layout
+ * Question Box Block matching A4 official white paper with crisp black borders,
+ * Drag-and-Drop highlight target, Inline Rich Text Editor, and Rich Attachments
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -1095,26 +1609,74 @@ private fun YemeniQuestionBox(
     index: Int,
     question: ExamQuestion,
     isAnswerKeyView: Boolean,
+    isPrintPreviewMode: Boolean,
+    isInlineEditing: Boolean,
+    isDropTarget: Boolean,
     primaryColor: Color,
     isGeneratingSingle: Boolean,
+    modifier: Modifier = Modifier,
+    onToggleInlineEdit: () -> Unit,
+    onUpdateQuestion: (ExamQuestion) -> Unit,
+    onOpenInsertTable: () -> Unit,
+    onOpenInsertImage: () -> Unit,
+    onOpenGraphicsLibrary: () -> Unit,
     onEditQuestion: () -> Unit,
     onDeleteQuestion: () -> Unit,
     onMoveUp: () -> Unit,
     onMoveDown: () -> Unit,
     onRegenerateSingle: () -> Unit
 ) {
+    val activeBorderColor = when {
+        isDropTarget -> Color(0xFF2563EB)
+        isInlineEditing -> primaryColor
+        else -> Color.Black
+    }
+    val borderThickness = if (isDropTarget || isInlineEditing) 2.5.dp else 1.5.dp
+
+    val parsedTextColor = remember(question.richStyle.textColorHex) {
+        try {
+            Color(android.graphics.Color.parseColor(question.richStyle.textColorHex))
+        } catch (_: Throwable) {
+            Color.Black
+        }
+    }
+    val textAlignValue = when (question.richStyle.align) {
+        "CENTER" -> TextAlign.Center
+        "END" -> TextAlign.End
+        else -> TextAlign.Start
+    }
+
     Card(
-        shape = RoundedCornerShape(10.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
-        border = androidx.compose.foundation.BorderStroke(1.5.dp, primaryColor),
-        modifier = Modifier
+        shape = RoundedCornerShape(if (isPrintPreviewMode) 2.dp else 6.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isDropTarget) Color(0xFFEFF6FF) else Color.White
+        ),
+        border = BorderStroke(borderThickness, activeBorderColor),
+        modifier = modifier
             .fillMaxWidth()
             .testTag("yemeni_question_box_$index")
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
-            // Header Bar: [ م ] | [ السؤال ] | [ الدرجة ]
+            // Drop Target Indicator
+            if (isDropTarget) {
+                Surface(
+                    color = Color(0xFF2563EB),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        "⬇️ أفلت هنا لإدراج العنصر داخل السؤال ${index + 1}",
+                        color = Color.White,
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(vertical = 4.dp)
+                    )
+                }
+            }
+
+            // Header Bar: [ السؤال ] | [ الدرجة ] + edit buttons (hidden in Print Preview Mode!)
             Surface(
-                color = primaryColor,
+                color = if (isPrintPreviewMode) Color(0xFFF1F5F9) else primaryColor,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
@@ -1126,7 +1688,7 @@ private fun YemeniQuestionBox(
                 ) {
                     Text(
                         "السؤال ${index + 1}",
-                        color = Color.White,
+                        color = if (isPrintPreviewMode) Color.Black else Color.White,
                         fontWeight = FontWeight.Bold,
                         fontSize = 12.sp
                     )
@@ -1134,45 +1696,61 @@ private fun YemeniQuestionBox(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Surface(
                             shape = RoundedCornerShape(4.dp),
-                            color = Color.White.copy(alpha = 0.2f)
+                            color = if (isPrintPreviewMode) Color.White else Color.White.copy(alpha = 0.2f),
+                            border = if (isPrintPreviewMode) BorderStroke(1.dp, Color.Black) else null
                         ) {
                             Text(
                                 "الدرجة : ${question.score}",
-                                color = Color.White,
+                                color = if (isPrintPreviewMode) Color.Black else Color.White,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 11.sp,
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                             )
                         }
 
-                        Spacer(modifier = Modifier.width(6.dp))
+                        // Hide ALL edit buttons in Print Preview Mode!
+                        if (!isPrintPreviewMode) {
+                            Spacer(modifier = Modifier.width(6.dp))
 
-                        // Actions: Edit, Regenerate, Up, Down, Delete
-                        IconButton(onClick = onEditQuestion, modifier = Modifier.size(24.dp)) {
-                            Icon(Icons.Default.Edit, contentDescription = "تعديل", tint = Color.White, modifier = Modifier.size(14.dp))
-                        }
-
-                        IconButton(onClick = onRegenerateSingle, modifier = Modifier.size(24.dp)) {
-                            if (isGeneratingSingle) {
-                                CircularProgressIndicator(modifier = Modifier.size(12.dp), color = Color.White)
-                            } else {
-                                Icon(Icons.Default.AutoAwesome, contentDescription = "إعادة توليد", tint = Color.White, modifier = Modifier.size(14.dp))
+                            IconButton(onClick = onToggleInlineEdit, modifier = Modifier.size(26.dp)) {
+                                Icon(
+                                    Icons.Default.TextFields,
+                                    contentDescription = "تحرير مباشر",
+                                    tint = if (isInlineEditing) Color(0xFFFDE047) else Color.White,
+                                    modifier = Modifier.size(15.dp)
+                                )
                             }
-                        }
 
-                        IconButton(onClick = onMoveUp, modifier = Modifier.size(24.dp)) {
-                            Icon(Icons.Default.ArrowUpward, contentDescription = "أعلى", tint = Color.White, modifier = Modifier.size(14.dp))
-                        }
+                            IconButton(onClick = onEditQuestion, modifier = Modifier.size(26.dp)) {
+                                Icon(Icons.Default.Edit, contentDescription = "تعديل متقدم", tint = Color.White, modifier = Modifier.size(14.dp))
+                            }
 
-                        IconButton(onClick = onMoveDown, modifier = Modifier.size(24.dp)) {
-                            Icon(Icons.Default.ArrowDownward, contentDescription = "أسفل", tint = Color.White, modifier = Modifier.size(14.dp))
-                        }
+                            IconButton(onClick = onRegenerateSingle, modifier = Modifier.size(26.dp)) {
+                                if (isGeneratingSingle) {
+                                    CircularProgressIndicator(modifier = Modifier.size(12.dp), color = Color.White)
+                                } else {
+                                    Icon(Icons.Default.AutoAwesome, contentDescription = "إعادة توليد", tint = Color.White, modifier = Modifier.size(14.dp))
+                                }
+                            }
 
-                        IconButton(onClick = onDeleteQuestion, modifier = Modifier.size(24.dp)) {
-                            Icon(Icons.Default.Delete, contentDescription = "حذف", tint = Color.White, modifier = Modifier.size(14.dp))
+                            IconButton(onClick = onMoveUp, modifier = Modifier.size(26.dp)) {
+                                Icon(Icons.Default.ArrowUpward, contentDescription = "أعلى", tint = Color.White, modifier = Modifier.size(14.dp))
+                            }
+
+                            IconButton(onClick = onMoveDown, modifier = Modifier.size(26.dp)) {
+                                Icon(Icons.Default.ArrowDownward, contentDescription = "أسفل", tint = Color.White, modifier = Modifier.size(14.dp))
+                            }
+
+                            IconButton(onClick = onDeleteQuestion, modifier = Modifier.size(26.dp)) {
+                                Icon(Icons.Default.Delete, contentDescription = "حذف", tint = Color.White, modifier = Modifier.size(14.dp))
+                            }
                         }
                     }
                 }
+            }
+
+            if (isPrintPreviewMode) {
+                HorizontalDivider(color = Color.Black, thickness = 1.dp)
             }
 
             // Question Content Area
@@ -1180,13 +1758,32 @@ private fun YemeniQuestionBox(
                 modifier = Modifier.padding(10.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
+                // Tappable Question Text with Rich Style
                 Text(
-                    question.text,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.Black,
-                    lineHeight = 18.sp
+                    text = question.text,
+                    fontSize = question.richStyle.fontSizeSp.sp,
+                    fontWeight = if (question.richStyle.isBold) FontWeight.Bold else FontWeight.Normal,
+                    fontStyle = if (question.richStyle.isItalic) FontStyle.Italic else FontStyle.Normal,
+                    textDecoration = if (question.richStyle.isUnderline) TextDecoration.Underline else TextDecoration.None,
+                    color = parsedTextColor,
+                    textAlign = textAlignValue,
+                    lineHeight = (question.richStyle.fontSizeSp + 6).sp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(if (!isPrintPreviewMode) Modifier.clickable { onToggleInlineEdit() } else Modifier)
                 )
+
+                // Inline Rich Text Editor Panel (visible when user taps question text or Aa icon, hidden on print!)
+                if (isInlineEditing && !isPrintPreviewMode) {
+                    InlineQuestionRichEditorPanel(
+                        question = question,
+                        onUpdateQuestion = onUpdateQuestion,
+                        onOpenInsertTable = onOpenInsertTable,
+                        onOpenInsertImage = onOpenInsertImage,
+                        onOpenGraphicsLibrary = onOpenGraphicsLibrary,
+                        onDoneEditing = onToggleInlineEdit
+                    )
+                }
 
                 // Render Options if MCQ
                 if (question.options.isNotEmpty()) {
@@ -1199,8 +1796,8 @@ private fun YemeniQuestionBox(
                             val isCorrect = isAnswerKeyView && opt.trim() == question.correctAnswer.trim()
                             Surface(
                                 shape = RoundedCornerShape(6.dp),
-                                color = if (isCorrect) Color(0xFFDCFCE7) else Color(0xFFF8FAFC),
-                                border = androidx.compose.foundation.BorderStroke(1.dp, if (isCorrect) Color(0xFF16A34A) else Color(0xFFCBD5E1))
+                                color = if (isCorrect) Color(0xFFDCFCE7) else Color.White,
+                                border = BorderStroke(1.dp, if (isCorrect) Color(0xFF16A34A) else Color.Black)
                             ) {
                                 Text(
                                     opt,
@@ -1214,18 +1811,18 @@ private fun YemeniQuestionBox(
                     }
                 }
 
-                // Render True / False or Fill Blank lines
+                // Render True / False
                 if (question.type == QuestionType.TRUE_FALSE && !isAnswerKeyView) {
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(16.dp),
                         modifier = Modifier.padding(vertical = 4.dp)
                     ) {
-                        Text("(   ) صح", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        Text("(   ) خطأ", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Text("(   ) صح", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.Black)
+                        Text("(   ) خطأ", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.Black)
                     }
                 }
 
-                // Render Diagram if present
+                // Render Legacy/Geometry Diagram if present
                 if (!question.diagramType.isNullOrBlank()) {
                     Box(
                         modifier = Modifier
@@ -1241,17 +1838,31 @@ private fun YemeniQuestionBox(
                     }
                 }
 
+                // Rich Attachments: Graphics Library Icons, Uploaded Photos, Editable Tables
+                ExamQuestionRichAttachmentsView(
+                    question = question,
+                    isEditMode = true,
+                    isAnswerKeyView = isAnswerKeyView,
+                    isPrintPreviewMode = isPrintPreviewMode,
+                    onUpdateQuestion = onUpdateQuestion
+                )
+
                 // Student Work Space / Dotted lines
-                if (!isAnswerKeyView && question.options.isEmpty() && question.type != QuestionType.TRUE_FALSE) {
+                if (!isAnswerKeyView && question.options.isEmpty() && question.type != QuestionType.TRUE_FALSE && question.insertedTables.isEmpty()) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(top = 4.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        Text("الإجابة / خطوات الحل:", fontSize = 10.sp, color = Color.Gray)
-                        Text("...........................................................................................................................................", fontSize = 10.sp, color = Color.LightGray)
-                        Text("...........................................................................................................................................", fontSize = 10.sp, color = Color.LightGray)
+                        Text("الإجابة / خطوات الحل:", fontSize = 10.sp, color = Color.DarkGray)
+                        repeat(question.answerLinesCount.coerceIn(1, 5)) {
+                            Text(
+                                "...........................................................................................................................................",
+                                fontSize = 10.sp,
+                                color = Color.Gray
+                            )
+                        }
                     }
                 }
 
@@ -1260,7 +1871,7 @@ private fun YemeniQuestionBox(
                     Surface(
                         shape = RoundedCornerShape(6.dp),
                         color = Color(0xFFF0FDF4),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF22C55E)),
+                        border = BorderStroke(1.dp, Color(0xFF22C55E)),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Column(modifier = Modifier.padding(8.dp)) {
@@ -1278,7 +1889,7 @@ private fun YemeniQuestionBox(
 }
 
 /**
- * Score Summary Table matching the Bottom of the attached reference image
+ * Score Summary Table matching Official White A4 Black-Bordered Table
  */
 @Composable
 private fun YemeniScoreSummaryTable(
@@ -1286,9 +1897,9 @@ private fun YemeniScoreSummaryTable(
     primaryColor: Color
 ) {
     Surface(
-        shape = RoundedCornerShape(8.dp),
-        border = androidx.compose.foundation.BorderStroke(1.5.dp, primaryColor),
-        color = Color(0xFFF8FAFC),
+        shape = RoundedCornerShape(4.dp),
+        border = BorderStroke(1.5.dp, Color.Black),
+        color = Color.White,
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
@@ -1296,7 +1907,7 @@ private fun YemeniScoreSummaryTable(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(primaryColor.copy(alpha = 0.12f)),
+                    .background(Color(0xFFF1F5F9)),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 (0 until count).forEach { i ->
@@ -1312,7 +1923,7 @@ private fun YemeniScoreSummaryTable(
                         "السؤال $qNumStr",
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
-                        color = primaryColor,
+                        color = Color.Black,
                         textAlign = TextAlign.Center,
                         modifier = Modifier
                             .weight(1f)
@@ -1323,7 +1934,7 @@ private fun YemeniScoreSummaryTable(
                     "المجموع",
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
-                    color = primaryColor,
+                    color = Color.Black,
                     textAlign = TextAlign.Center,
                     modifier = Modifier
                         .weight(1f)
@@ -1331,7 +1942,7 @@ private fun YemeniScoreSummaryTable(
                 )
             }
 
-            Divider(color = primaryColor)
+            HorizontalDivider(color = Color.Black, thickness = 1.dp)
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1342,7 +1953,7 @@ private fun YemeniScoreSummaryTable(
                     Text(
                         if (score > 0) "/ $score" else "",
                         fontSize = 11.sp,
-                        color = Color.DarkGray,
+                        color = Color.Black,
                         textAlign = TextAlign.Center,
                         modifier = Modifier
                             .weight(1f)
