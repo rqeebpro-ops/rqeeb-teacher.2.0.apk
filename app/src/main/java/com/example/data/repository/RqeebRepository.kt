@@ -77,28 +77,29 @@ class RqeebRepository(
     }
 
     suspend fun registerTeacher(teacher: TeacherEntity): Pair<Boolean, String> {
-        val cleanEmail = teacher.email.trim()
         val cleanPhone = teacher.phone.trim()
+        val phoneDigits = cleanPhone.replace(Regex("[^0-9]"), "").ifBlank { cleanPhone }
+        val cleanEmail = teacher.email.trim().ifBlank { "${phoneDigits}@smartteacher.ye" }
 
         // Check local duplicate
-        val existingLocal = teacherDao.getTeacherByEmailOrPhone(cleanEmail)
-            ?: teacherDao.getTeacherByEmailOrPhone(cleanPhone)
+        val existingLocal = teacherDao.getTeacherByEmailOrPhone(cleanPhone)
+            ?: teacherDao.getTeacherByEmailOrPhone(cleanEmail)
         if (existingLocal != null) {
-            return Pair(false, "البريد الإلكتروني أو رقم الهاتف مسجل مسبقاً في النظام")
+            return Pair(false, "رقم الهاتف مسجل مسبقاً في النظام")
         }
 
         // Check cloud duplicate
-        val existingCloud = cloudSyncService?.fetchTeacherStatus(cleanEmail)
-            ?: cloudSyncService?.fetchTeacherStatus(cleanPhone)
+        val existingCloud = cloudSyncService?.fetchTeacherStatus(cleanPhone)
+            ?: cloudSyncService?.fetchTeacherStatus(cleanEmail)
         if (existingCloud != null) {
             teacherDao.insertTeacher(existingCloud)
-            return Pair(false, "البريد الإلكتروني أو رقم الهاتف مسجل مسبقاً على الخادم المركزي")
+            return Pair(false, "رقم الهاتف مسجل مسبقاً على الخادم المركزي")
         }
 
         val autoApprove = appSettingDao.getValue("auto_approve") == "true"
         val status = if (autoApprove) TeacherEntity.STATUS_APPROVED else TeacherEntity.STATUS_PENDING
         val isAct = autoApprove
-        val teacherToSave = teacher.copy(status = status, isActivated = isAct)
+        val teacherToSave = teacher.copy(email = cleanEmail, status = status, isActivated = isAct)
 
         val localId = teacherDao.insertTeacher(teacherToSave)
         val withLocalId = teacherToSave.copy(id = localId)
@@ -222,7 +223,7 @@ class RqeebRepository(
                     teacherName = teacher.fullName
                 ))
             }
-            return Pair(true, "تم تفعيل حسابك بنجاح لمدة عام كامل! يمكنك الآن استخدام كافة مميزات رقيب.")
+            return Pair(true, "تم تفعيل حسابك بنجاح لمدة عام كامل! يمكنك الآن استخدام كافة مميزات المعلم التربوي الذكي.")
         }
 
         // 2. Local Fallback Validation against Activation Codes Table
@@ -247,7 +248,7 @@ class RqeebRepository(
                 usedAt = System.currentTimeMillis(),
                 status = "USED",
                 teacherPhone = cleanId,
-                teacherName = if (codeEntity.teacherName.isNotBlank() && codeEntity.teacherName != "كود عام متاح") codeEntity.teacherName else "معلم رقيب"
+                teacherName = if (codeEntity.teacherName.isNotBlank() && codeEntity.teacherName != "كود عام متاح") codeEntity.teacherName else "معلم جديد"
             ))
 
             // Update or create teacher
@@ -261,9 +262,9 @@ class RqeebRepository(
             } else {
                 teacherDao.insertTeacher(
                     TeacherEntity(
-                        fullName = if (codeEntity.teacherName.isNotBlank() && codeEntity.teacherName != "كود عام متاح") codeEntity.teacherName else "أ. معلم رقيب",
+                        fullName = if (codeEntity.teacherName.isNotBlank() && codeEntity.teacherName != "كود عام متاح") codeEntity.teacherName else "أ. معلم",
                         phone = cleanId,
-                        email = if (cleanId.contains("@")) cleanId else "$cleanId@rqeeb.edu",
+                        email = if (cleanId.contains("@")) cleanId else "$cleanId@smartteacher.ye",
                         passwordHash = "123456",
                         schoolName = "مدرسة يمنية",
                         governorate = "أمانة العاصمة",

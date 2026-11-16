@@ -1537,7 +1537,7 @@ private fun ActionChip(label: String, onClick: () -> Unit) {
 
 private fun copyText(context: Context, text: String) {
     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-    val clip = ClipData.newPlainText("رقيب الشرح الذكي", text)
+    val clip = ClipData.newPlainText("المعلم التربوي الذكي - الشرح الذكي", text)
     clipboard.setPrimaryClip(clip)
     Toast.makeText(context, "تم النسخ إلى الحافظة!", Toast.LENGTH_SHORT).show()
 }
@@ -1853,6 +1853,6 @@ private fun buildFullShareText(res: SmartExplanationResult): String {
     sb.appendLine(res.blackboardPlan)
 
     sb.appendLine("---------------------------------------")
-    sb.appendLine("تم إعداده عبر تطبيق «رقيب - مساعد المعلم الذكي»")
+    sb.appendLine("تم إعداده عبر تطبيق «المعلم التربوي الذكي»")
     return sb.toString()
 }

@@ -261,9 +261,9 @@ fun OwnerTeacherManagementTab(
                         },
                         onSendWhatsApp = {
                             val msg = if (teacher.activationCode.isNotBlank()) {
-                                "مرحباً يا أستاذ ${teacher.fullName}، كود التفعيل المخصص لحسابك في تطبيق «رقيب – مساعد المعلم الذكي» هو:\n${teacher.activationCode}\nيرجى تثبيت التطبيق وإدخال رقم هاتفك والكود لتفعيل حسابك مباشرة."
+                                "مرحباً يا أستاذ ${teacher.fullName}، كود التفعيل المخصص لحسابك في تطبيق «المعلم التربوي الذكي» هو:\n${teacher.activationCode}\nيرجى تثبيت التطبيق وإدخال رقم هاتفك والكود لتفعيل حسابك مباشرة."
                             } else {
-                                "مرحباً أستاذ ${teacher.fullName}، نود التواصل معك بشأن حسابك في تطبيق «رقيب – مساعد المعلم الذكي»."
+                                "مرحباً أستاذ ${teacher.fullName}، نود التواصل معك بشأن حسابك في تطبيق «المعلم التربوي الذكي»."
                             }
                             ContactUtils.openTeacherWhatsApp(context, teacher.phone, msg)
                         }
@@ -378,7 +378,7 @@ fun OwnerTeacherManagementTab(
                             teacherToApprove = null
                             if (success) {
                                 Toast.makeText(context, "تمت الموافقة وتوليد الكود: $code", Toast.LENGTH_LONG).show()
-                                val msg = "مرحباً يا أستاذ ${t.fullName}، تمت الموافقة على طلب انضمامك لتطبيق «رقيب – مساعد المعلم الذكي». كود التفعيل الخاص بك هو:\n$code"
+                                val msg = "مرحباً يا أستاذ ${t.fullName}، تمت الموافقة على طلب انضمامك لتطبيق «المعلم التربوي الذكي». كود التفعيل الخاص بك هو:\n$code"
                                 ContactUtils.openTeacherWhatsApp(context, t.phone, msg)
                             }
                         }
@@ -517,7 +517,9 @@ fun OwnerTeacherManagementTab(
                 Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("الاسم: ${t.fullName}", fontWeight = FontWeight.Bold)
                     Text("الهاتف: ${t.phone}")
-                    Text("البريد: ${t.email}")
+                    if (t.email.isNotBlank() && !t.email.endsWith("@smartteacher.ye") && !t.email.endsWith("@rqeeb.edu")) {
+                        Text("البريد: ${t.email}")
+                    }
                     Text("المدرسة: ${t.schoolName}")
                     Text("المحافظة والمديرية: ${t.governorate} - ${t.directorate.ifBlank { "غير محددة" }}")
                     Text("المادة والمرحلة: ${t.subject} (${t.stage})")
@@ -608,7 +610,7 @@ fun OwnerTeacherManagementTab(
 
                         FilledTonalButton(
                             onClick = {
-                                val msg = "مرحباً يا أستاذ ${info.name}، تم إنشاء وتفعيل حسابك في تطبيق «رقيب – مساعد المعلم الذكي».\nكود التفعيل الخاص بك هو:\n${info.code}\nيرجى فتح التطبيق واختيار 'تفعيل بكود المالك' لبدء الاستخدام."
+                                val msg = "مرحباً يا أستاذ ${info.name}، تم إنشاء وتفعيل حسابك في تطبيق «المعلم التربوي الذكي».\nكود التفعيل الخاص بك هو:\n${info.code}\nيرجى فتح التطبيق واختيار 'تفعيل بكود المالك' لبدء الاستخدام."
                                 ContactUtils.openTeacherWhatsApp(context, info.phone, msg)
                             },
                             modifier = Modifier.weight(1f)

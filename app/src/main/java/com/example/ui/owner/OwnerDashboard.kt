@@ -106,7 +106,7 @@ fun OwnerDashboard(
                             }
                         }
                         Text(
-                            "أ. عبد الرقيب فرج | خادم رقيب المركزي (Supabase)",
+                            "أ. عبد الرقيب فرج | خادم المعلم التربوي الذكي المركزي (Supabase)",
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

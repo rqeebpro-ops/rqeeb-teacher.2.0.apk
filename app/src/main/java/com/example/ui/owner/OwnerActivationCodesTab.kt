@@ -293,7 +293,7 @@ fun OwnerActivationCodesTab(
 
                             FilledTonalButton(
                                 onClick = {
-                                    val msg = "مرحباً يا أستاذ، كود التفعيل المخصص لحسابك في تطبيق «رقيب – مساعد المعلم الذكي» هو:\n${latest.code}\nصالح لمدة عام كامل. يرجى إدخال الكود لتفعيل حسابك مباشرة."
+                                    val msg = "مرحباً يا أستاذ، كود التفعيل المخصص لحسابك في تطبيق «المعلم التربوي الذكي» هو:\n${latest.code}\nصالح لمدة عام كامل. يرجى إدخال الكود لتفعيل حسابك مباشرة."
                                     ContactUtils.openTeacherWhatsApp(context, "", msg)
                                 },
                                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
@@ -403,11 +403,11 @@ fun OwnerActivationCodesTab(
                         return@OutlinedButton
                     }
                     val sb = StringBuilder()
-                    sb.append("=== قائمة أكواد تفعيل تطبيق رقيب (${availableCodes.size} كود) ===\n\n")
+                    sb.append("=== قائمة أكواد تفعيل تطبيق المعلم التربوي الذكي (${availableCodes.size} كود) ===\n\n")
                     availableCodes.forEachIndexed { i, c ->
                         sb.append("${i + 1}. ${c.code}  (صلاحية: سنة كاملة)\n")
                     }
-                    ContactUtils.copyToClipboard(context, "أكواد تفعيل رقيب", sb.toString().trim())
+                    ContactUtils.copyToClipboard(context, "أكواد تفعيل المعلم التربوي الذكي", sb.toString().trim())
                     Toast.makeText(context, "تم نسخ جميع الأكواد المتاحة (${availableCodes.size} كود) إلى الحافظة!", Toast.LENGTH_LONG).show()
                 },
                 shape = RoundedCornerShape(8.dp),
@@ -436,7 +436,7 @@ fun OwnerActivationCodesTab(
                     val sendIntent = Intent().apply {
                         action = Intent.ACTION_SEND
                         putExtra(Intent.EXTRA_TEXT, sb.toString())
-                        putExtra(Intent.EXTRA_SUBJECT, "أكواد تفعيل تطبيق رقيب المعلم")
+                        putExtra(Intent.EXTRA_SUBJECT, "أكواد تفعيل تطبيق المعلم التربوي الذكي")
                         type = "text/plain"
                     }
                     context.startActivity(Intent.createChooser(sendIntent, "مشاركة قائمة الأكواد"))
@@ -604,7 +604,7 @@ fun OwnerActivationCodesTab(
                     Toast.makeText(context, "تم نسخ الكود (${code.code})!", Toast.LENGTH_SHORT).show()
                 },
                 onWhatsApp = { code ->
-                    val msg = "مرحباً يا أستاذ، كود التفعيل الخاص بحسابك في تطبيق «رقيب» هو:\n${code.code}\nصلاحية عام كامل."
+                    val msg = "مرحباً يا أستاذ، كود التفعيل الخاص بحسابك في تطبيق «المعلم التربوي الذكي» هو:\n${code.code}\nصلاحية عام كامل."
                     ContactUtils.openTeacherWhatsApp(context, code.teacherPhone, msg)
                 },
                 onRevoke = { code ->
@@ -626,7 +626,7 @@ fun OwnerActivationCodesTab(
                             Toast.makeText(context, "تم نسخ الكود (${codeItem.code})!", Toast.LENGTH_SHORT).show()
                         },
                         onSendWhatsApp = {
-                            val msg = "مرحباً يا أستاذ، كود التفعيل المخصص لحسابك في تطبيق «رقيب» هو:\n${codeItem.code}\nصالح لمدة عام كامل."
+                            val msg = "مرحباً يا أستاذ، كود التفعيل المخصص لحسابك في تطبيق «المعلم التربوي الذكي» هو:\n${codeItem.code}\nصالح لمدة عام كامل."
                             ContactUtils.openTeacherWhatsApp(context, codeItem.teacherPhone, msg)
                         },
                         onRevoke = {

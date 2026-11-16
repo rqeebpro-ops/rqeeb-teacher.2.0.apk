@@ -66,7 +66,7 @@ fun OwnerAppContentTab(
 
         whatsappInput = wa ?: YemeniCurriculum.OWNER_WHATSAPP_URL_DEFAULT
         phoneInput = ph ?: YemeniCurriculum.OWNER_PHONE_DEFAULT
-        guideTextInput = gt ?: "مرحباً بك في رقيب مساعد المعلم الذكي. يمكنك تحضير الدروس وفق الخطة القياسية وطباعة كشوفات الدرجات والاختبارات المعتمدة."
+        guideTextInput = gt ?: "مرحباً بك في المعلم التربوي الذكي. يمكنك تحضير الدروس وفق الخطة القياسية وطباعة كشوفات الدرجات والاختبارات المعتمدة."
         curriculumInfoInput = ci ?: "يدعم التطبيق المناهج المدرسية الصادرة عن وزارة التربية والتعليم للجمهورية اليمنية (طبعتي صنعاء وعدن)."
     }
 

@@ -240,7 +240,7 @@ fun LessonPrepScreen(
                         ) {
                             Image(
                                 painter = painterResource(id = R.drawable.img_app_logo),
-                                contentDescription = "شعار رقيب",
+                                contentDescription = "شعار المعلم التربوي الذكي",
                                 contentScale = ContentScale.Crop,
                                 modifier = Modifier.fillMaxSize()
                             )

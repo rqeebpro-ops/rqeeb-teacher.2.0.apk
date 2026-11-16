@@ -337,8 +337,8 @@ fun TeacherLoginForm(
                     identifier = it
                     errorMessage = null
                 },
-                label = { Text("البريد الإلكتروني أو رقم الهاتف (اليمن)") },
-                placeholder = { Text("مثال: 785502919 أو email@domain.com") },
+                label = { Text("رقم الهاتف (اليمن)") },
+                placeholder = { Text("مثال: 785502919") },
                 leadingIcon = { Icon(Icons.Default.AccountCircle, contentDescription = null) },
                 singleLine = true,
                 modifier = Modifier
@@ -386,7 +386,7 @@ fun TeacherLoginForm(
             Button(
                 onClick = {
                     if (identifier.isBlank() || password.isBlank()) {
-                        errorMessage = "يرجى إدخال البريد/الهاتف وكلمة المرور"
+                        errorMessage = "يرجى إدخال رقم الهاتف وكلمة المرور"
                         return@Button
                     }
                     isLoading = true
@@ -480,7 +480,7 @@ fun TeacherLoginForm(
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Text(
-                        "أدخل البريد أو رقم الهاتف المسجل به، وكود التفعيل الممنوح لك من مالك النظام:",
+                        "أدخل رقم الهاتف المسجل به، وكود التفعيل الممنوح لك من مالك النظام:",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -491,7 +491,7 @@ fun TeacherLoginForm(
                             activationIdentifierInput = it
                             activationMessage = null
                         },
-                        label = { Text("البريد الإلكتروني أو رقم الهاتف") },
+                        label = { Text("رقم الهاتف") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth().testTag("activation_identifier_input")
                     )
@@ -573,7 +573,7 @@ fun TeacherLoginForm(
             onDismissRequest = { showForgotPasswordDialog = false },
             title = { Text("استعادة كلمة المرور") },
             text = {
-                Text("لاستعادة كلمة المرور، يرجى التواصل مباشرة مع إدارة منصة رقيب عبر الواتساب على الرقم: 785502919 (+967). سيتم التحقق وتزويدك برابط آمن.")
+                Text("لاستعادة كلمة المرور، يرجى التواصل مباشرة مع إدارة تطبيق «المعلم التربوي الذكي» عبر الواتساب على الرقم: 785502919 (+967). سيتم التحقق وتزويدك برابط آمن.")
             },
             confirmButton = {
                 Button(onClick = {
@@ -604,7 +604,6 @@ fun TeacherRegisterForm(
     val coroutineScope = rememberCoroutineScope()
     var fullName by remember { mutableStateOf("") }
     var phone by remember { mutableStateOf("") }
-    var email by remember { mutableStateOf("") }
     var schoolName by remember { mutableStateOf("") }
     var governorate by remember { mutableStateOf("أمانة العاصمة") }
     var directorate by remember { mutableStateOf("") }
@@ -628,7 +627,7 @@ fun TeacherRegisterForm(
     var gradeExpanded by remember { mutableStateOf(false) }
 
     fun validateForm(): Boolean {
-        if (fullName.isBlank() || phone.isBlank() || email.isBlank() ||
+        if (fullName.isBlank() || phone.isBlank() ||
             schoolName.isBlank() || subject.isBlank() || password.isBlank()
         ) {
             errorMessage = "يرجى تعبئة كافة الحقول الإلزامية (*)"
@@ -682,26 +681,16 @@ fun TeacherRegisterForm(
                 modifier = Modifier.fillMaxWidth().testTag("reg_name_input")
             )
 
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = phone,
-                    onValueChange = { phone = it; errorMessage = null },
-                    label = { Text("رقم الهاتف (اليمن) *") },
-                    placeholder = { Text("785502919") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
-                    singleLine = true,
-                    modifier = Modifier.weight(1f).testTag("reg_phone_input")
-                )
-
-                OutlinedTextField(
-                    value = email,
-                    onValueChange = { email = it; errorMessage = null },
-                    label = { Text("البريد الإلكتروني *") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-                    singleLine = true,
-                    modifier = Modifier.weight(1f).testTag("reg_email_input")
-                )
-            }
+            OutlinedTextField(
+                value = phone,
+                onValueChange = { phone = it; errorMessage = null },
+                label = { Text("رقم الهاتف (اليمن) *") },
+                placeholder = { Text("785502919") },
+                leadingIcon = { Icon(Icons.Default.Phone, contentDescription = null) },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().testTag("reg_phone_input")
+            )
 
             OutlinedTextField(
                 value = schoolName,
@@ -885,10 +874,11 @@ fun TeacherRegisterForm(
                         onClick = {
                             if (!validateForm()) return@Button
                             coroutineScope.launch {
+                                val cleanPhoneDigits = phone.trim().replace(Regex("[^0-9]"), "").ifBlank { phone.trim() }
                                 val newTeacher = TeacherEntity(
                                     fullName = fullName.trim(),
                                     phone = phone.trim(),
-                                    email = email.trim(),
+                                    email = "${cleanPhoneDigits}@smartteacher.ye",
                                     passwordHash = password,
                                     schoolName = schoolName.trim(),
                                     governorate = governorate.trim(),
@@ -944,10 +934,11 @@ fun TeacherRegisterForm(
                             isActivatingCode = true
                             coroutineScope.launch {
                                 // 1. Save or update teacher entity
+                                val cleanPhoneDigits = phone.trim().replace(Regex("[^0-9]"), "").ifBlank { phone.trim() }
                                 val newTeacher = TeacherEntity(
                                     fullName = fullName.trim(),
                                     phone = phone.trim(),
-                                    email = email.trim(),
+                                    email = "${cleanPhoneDigits}@smartteacher.ye",
                                     passwordHash = password,
                                     schoolName = schoolName.trim(),
                                     governorate = governorate.trim(),
@@ -963,12 +954,12 @@ fun TeacherRegisterForm(
 
                                 // 2. Activate with code
                                 val (ok, msg) = repository.activateWithCode(
-                                    phone.trim().ifBlank { email.trim() },
+                                    phone.trim(),
                                     activationCodeInput.trim()
                                 )
                                 isActivatingCode = false
                                 if (ok) {
-                                    val activeTeacher = repository.getTeacherByLogin(phone.trim().ifBlank { email.trim() })
+                                    val activeTeacher = repository.getTeacherByLogin(phone.trim())
                                     if (activeTeacher != null) {
                                         onTeacherLoggedIn(activeTeacher)
                                     } else {
